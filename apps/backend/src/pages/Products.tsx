@@ -1140,7 +1140,7 @@ const ProductRow = memo(({
       {isSofaView ? (
         <>
           <td className={styles.numCellMuted} style={{ textAlign: 'left' }}>
-            {row.base_model ?? '—'}
+            {row.model_name || row.base_model || '—'}
           </td>
           {sofaSizes.map((s) => {
             const sen = priceForHeightTier(seatArr, s, tier);
