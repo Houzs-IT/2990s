@@ -40,6 +40,7 @@ import {
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
+import { seedSwapCells, type SwapCellIn } from '../lib/sofa-swap-seed';
 import {
   useCart,
   sofaAccessoryConfig,
@@ -491,16 +492,14 @@ export const Configurator = () => {
   const swapSeededRef = useRef(false);
   useEffect(() => {
     if (!isSwapMode || swapSeededRef.current) return;
-    const cellsIn = (location.state as { swapCells?: Array<{ moduleId: string; x: number; y: number; rot: number }> } | null)?.swapCells;
+    const st = location.state as { swapCells?: SwapCellIn[]; swapDepth?: string } | null;
+    const cellsIn = st?.swapCells;
     if (cellsIn && cellsIn.length > 0) {
-      // Saved x/y sit wherever the SO was built; centre the group in the room
-      // (pure translation, so the modules stay joined) like Quick Pick does.
-      setSofaCells(centerCellsInRoom(cellsIn.map((c) => ({
-        id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-          ? crypto.randomUUID()
-          : `c-${Math.random().toString(36).slice(2, 10)}`,
-        moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot,
-      } as Cell)), activeDepth));
+      const depth = st?.swapDepth ?? activeDepth;
+      setActiveDepth(depth);
+      setSofaCells(seedSwapCells(cellsIn, depth, () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `c-${Math.random().toString(36).slice(2, 10)}`));
       setMode('custom');
     }
     swapSeededRef.current = true;

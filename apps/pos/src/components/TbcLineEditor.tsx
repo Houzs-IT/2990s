@@ -497,7 +497,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     navigate(
       `/configure/${configureId}?${qs}`,
       sameModel && target.buildCells && target.buildCells.length > 0
-        ? { state: { swapCells: target.buildCells } }
+        ? { state: { swapCells: target.buildCells, swapDepth: typeof target.variants?.depth === 'string' ? target.variants.depth : undefined } }
         : undefined,
     );
   };
