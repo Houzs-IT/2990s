@@ -493,12 +493,14 @@ export const Configurator = () => {
     if (!isSwapMode || swapSeededRef.current) return;
     const cellsIn = (location.state as { swapCells?: Array<{ moduleId: string; x: number; y: number; rot: number }> } | null)?.swapCells;
     if (cellsIn && cellsIn.length > 0) {
-      setSofaCells(cellsIn.map((c) => ({
+      // Saved x/y sit wherever the SO was built; centre the group in the room
+      // (pure translation, so the modules stay joined) like Quick Pick does.
+      setSofaCells(centerCellsInRoom(cellsIn.map((c) => ({
         id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `c-${Math.random().toString(36).slice(2, 10)}`,
         moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot,
-      } as Cell)));
+      } as Cell)), activeDepth));
       setMode('custom');
     }
     swapSeededRef.current = true;
