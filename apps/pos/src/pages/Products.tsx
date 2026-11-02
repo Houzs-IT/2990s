@@ -852,21 +852,11 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
     [everyModel, filter],
   );
 
-  /* Per-Model SKU counts — derived from mfg_products.base_model. Backend
-     has its own server-side count via the rich endpoint; POS does a single
-     pass over the SKU list for the same view to avoid porting that. */
+  /* Per-Model SKU counts — grouped by model_id (base_model is the model code
+     and never follows a rename, so a name/code match shows "0 SKUs" — 2990-0022). */
   const { data: products } = useMfgProducts({
     category: filter === 'all' ? undefined : filter,
   });
-  const skuCountByModelName = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of products ?? []) {
-      const k = p.base_model ?? '';
-      if (!k) continue;
-      map.set(k, (map.get(k) ?? 0) + 1);
-    }
-    return map;
-  }, [products]);
   // Each Model's SKUs, for the "Hidden from POS" mark — on a single-SKU Model
   // it reads the SKUs' shelf flag, as the drawer's switch does.
   const skusByModelId = useMemo(() => {
@@ -1093,7 +1083,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     >
                       <Layers size={11} strokeWidth={1.75} />
                       {(() => {
-                        const n = skuCountByModelName.get(m.name) ?? 0;
+                        const n = skusByModelId.get(m.id)?.length ?? 0;
                         return `${n} SKU${n === 1 ? '' : 's'}`;
                       })()}
                     </div>
@@ -2322,7 +2312,7 @@ const ProductRow = ({
       {isSofaView ? (
         <>
           <td className={styles.numCellMuted} style={{ textAlign: 'left' }}>
-            {row.base_model ?? '—'}
+            {row.model_name || row.base_model || '—'}
           </td>
           {sofaSizes.map((s) => {
             // Buyer SELLING price at the default (P1) tier — what the POS grid

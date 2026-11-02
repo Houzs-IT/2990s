@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { findModelUsage, SkuUsageUndetermined } from '../lib/sku-usage';
+import { chunkIn } from '../lib/paginate-all';
 import type { Env, Variables } from '../env';
 
 export const productModels = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -122,11 +123,11 @@ productModels.get('/', async (c) => {
   // a single id column is cheaper than a per-model count roundtrip.
   const counts = new Map<string, number>();
   if (rows.length > 0) {
-    let cq = supabase.from('mfg_products').select('model_id').not('model_id', 'is', null);
-    // Scope to the models we're returning so a category filter doesn't pull
-    // the whole table (and so the count query stays bounded).
-    cq = cq.in('model_id', rows.map((m) => m.id));
-    const { data: skuRows } = await cq;
+    // Paged + chunked: one bare request is cut at 1000 rows by PostgREST, which
+    // showed "0 SKUs" on models whose SKUs fell past the cut (2990-0022).
+    const { data: skuRows, error: cntErr } = await chunkIn(rows.map((m) => m.id), (batch, from, to) =>
+      supabase.from('mfg_products').select('model_id').in('model_id', batch).order('id').range(from, to));
+    if (cntErr) return c.json({ error: 'load_failed', reason: cntErr.message }, 500);
     for (const r of (skuRows ?? []) as Array<{ model_id: string | null }>) {
       if (r.model_id) counts.set(r.model_id, (counts.get(r.model_id) ?? 0) + 1);
     }
