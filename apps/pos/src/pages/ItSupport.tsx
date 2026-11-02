@@ -22,17 +22,18 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : 'Please try again 
 function Files({ files, onChange }: { files: File[]; onChange: (f: File[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [refused, setRefused] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const add = (list: FileList | null) => {
+    const r = itAddFiles(files, list);
+    if ('refused' in r) return setRefused(r.refused);
+    setRefused(null);
+    onChange(r.files);
+  };
   return (
     <div className={styles.files}>
       <input
         ref={input} type="file" multiple accept={IT_ACCEPT} hidden
-        onChange={(e) => {
-          const r = itAddFiles(files, e.target.files);
-          e.target.value = '';
-          if ('refused' in r) return setRefused(r.refused);
-          setRefused(null);
-          onChange(r.files);
-        }}
+        onChange={(e) => { add(e.target.files); e.target.value = ''; }}
       />
       {files.map((f, i) => (
         <span key={`${f.name}-${i}`} className={styles.chip}>
@@ -41,9 +42,16 @@ function Files({ files, onChange }: { files: File[]; onChange: (f: File[]) => vo
         </span>
       ))}
       {files.length < IT_MAX_FILES && (
-        <Button type="button" variant="ghost" onClick={() => input.current?.click()}>
-          <Paperclip size={16} strokeWidth={1.75} /> Add a screenshot or file
-        </Button>
+        <button
+          type="button" className={`${styles.drop} ${over ? styles.dropOver : ''}`}
+          onClick={() => input.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => { e.preventDefault(); setOver(false); add(e.dataTransfer.files); }}
+        >
+          <Paperclip size={24} strokeWidth={1.75} />
+          <span>Drop a screenshot, recording or file here, or tap to choose</span>
+        </button>
       )}
       <p className={styles.hint}>Pictures, MP4 or MOV video, PDF or ZIP. Up to {IT_MAX_FILES} files, 10 MB each.</p>
       {refused && <p role="alert" className={styles.error}>{refused}</p>}
