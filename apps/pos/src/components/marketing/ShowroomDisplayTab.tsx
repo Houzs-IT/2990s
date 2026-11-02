@@ -6,7 +6,7 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
 import {
-  detailRows, moduleInfo, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
+  detailRows, diagramSizeProblem, moduleInfo, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
@@ -57,7 +57,8 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
   const [d, setD] = useState(it.dimsDepthCm == null ? '' : String(it.dimsDepthCm));
   const wn = Number(w), dn = Number(d);
   const blank = !w.trim() && !d.trim();
-  const dimsOk = blank || (Number.isInteger(wn) && Number.isInteger(dn) && wn >= 1 && wn <= 1000 && dn >= 1 && dn <= 1000);
+  const problem = diagramSizeProblem(w, d);
+  const dimsOk = !problem;
   const save = (p: { remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null }, done: string) =>
     edit.mutate({ id: it.id, ...p }, { onSuccess: () => toast(done), onError: (e) => toast((e as Error).message) });
   return (
@@ -89,7 +90,7 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
             <span className={s.inchUnit}>cm</span>
           </div>
           <div className={s.refPhotoNote}>
-            {dimsOk ? 'Blank = the size worked out from the layout.' : 'Width and depth: whole cm, 1 to 1000.'}
+            {problem || 'Blank = the size worked out from the layout.'}
           </div>
           <button
             type="button" className={s.ghostBtn} disabled={edit.isPending || !dimsOk}

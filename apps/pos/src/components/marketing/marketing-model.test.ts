@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankRequest, cmOf, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
+  blankRequest, cmOf, diagramSizeProblem, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
   requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf, tagsOf, type DisplayItem,
   type LaunchRequest,
 } from './marketing-model';
@@ -313,5 +313,14 @@ describe('exportText', () => {
     expect(text).toContain('Deliver to    : -');
     expect(text).toContain('Action        : Add');
     expect(text).toContain('Requested by  : Marketing · -');
+  });
+});
+
+describe('diagramSizeProblem', () => {
+  it('explains a width typed without a depth, accepts a pair or both blank', () => {
+    expect(diagramSizeProblem('280', '')).toMatch(/both width and depth/);
+    expect(diagramSizeProblem('280', '95')).toBe('');
+    expect(diagramSizeProblem('', '')).toBe('');
+    expect(diagramSizeProblem('0', '95')).toMatch(/whole cm/);
   });
 });

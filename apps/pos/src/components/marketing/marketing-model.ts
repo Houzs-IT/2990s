@@ -557,3 +557,13 @@ export function exportText(r: LaunchRequest, ctx: ExportContext): string {
   L.push(`Requested by  : ${v(r.by)} · ${v(shortDate(r.created))}`);
   return L.join('\n');
 }
+
+/** Why "Save size" is off, or '' when it is on. Width and depth are saved as a
+ *  pair (the API and the DB check refuse one without the other), so a width
+ *  typed alone used to leave the button greyed with only a generic hint. */
+export const diagramSizeProblem = (w: string, d: string): string => {
+  const ok = (v: string) => /^\d+$/.test(v.trim()) && Number(v) >= 1 && Number(v) <= 1000;
+  if (!w.trim() && !d.trim()) return '';
+  if (!w.trim() || !d.trim()) return 'Enter both width and depth, or clear both to use the layout size.';
+  return ok(w) && ok(d) ? '' : 'Width and depth: whole cm, 1 to 1000.';
+};
