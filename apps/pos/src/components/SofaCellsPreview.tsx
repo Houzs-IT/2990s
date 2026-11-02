@@ -60,6 +60,9 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
+/** Module sizes sum to floats (282.99999999999994); the labels print whole cm. */
+export const wholeCm = (n: number) => Math.round(n);
+
 export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true, dimsLabel, accessories = [], accessoryOptions = new Map() }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
@@ -242,14 +245,14 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
             <span style={tickV} />
             <span style={lineH} />
             <span style={tickV} />
-            <span style={dimLabel}>{dimsLabel?.w ?? bb.w}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.w ?? wholeCm(bb.w)}<span style={dimUnit}>cm</span></span>
           </div>
           {/* Right depth dim — same, rotated to the right edge. */}
           <div style={dimRight} aria-hidden="true">
             <span style={tickH} />
             <span style={lineV} />
             <span style={tickH} />
-            <span style={dimLabel}>{dimsLabel?.h ?? bb.h}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.h ?? wholeCm(bb.h)}<span style={dimUnit}>cm</span></span>
           </div>
         </>
       )}
