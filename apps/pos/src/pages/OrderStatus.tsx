@@ -421,6 +421,9 @@ const describeSoActionError = (e: unknown): string => {
     return `Some items have picks the customer hasn't confirmed yet — ${detail}. `
       + 'Tap the pencil on that item above to complete them, then set the dates and Proceed.';
   }
+  if (err === 'so_version_conflict' || err === 'so_version_required') {
+    return 'Someone else changed this order just now. Close this order, open it again and retry.';
+  }
   if (err === 'so_total_below_original') {
     return 'Changes cannot reduce the bill below the original sales order total.';
   }
@@ -1737,6 +1740,17 @@ const OrderDetail = ({ order, onClose }: {
     return res;
   };
 
+  /* Houzs refuses a header PATCH without the `version` the screen loaded (428
+     so_version_required, "opened with an older screen") once its rollout grace
+     window closed. /mine carries no version, so read it from the detail just
+     before writing. shortcut: read-then-write, so it cannot catch an edit made
+     since this drawer opened; upgrade when /mine returns `version`. */
+  const currentVersion = async (): Promise<number> => {
+    const res = await authedFetch(`/mfg-sales-orders/${encodeURIComponent(order.id)}`, { method: 'GET' });
+    const v = Number(((await res.json()) as { salesOrder?: { version?: unknown } }).salesOrder?.version);
+    return Number.isInteger(v) && v >= 1 ? v : 1;
+  };
+
   /* Record-payment full set (spec 2026-06-06 D4/D6) — method cascade synced
      with SO Maintenance (same hooks as the handover), per-payment slip,
      ledger history. */
@@ -1778,7 +1792,7 @@ const OrderDetail = ({ order, onClose }: {
     }> => {
       const res = await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...buildPatch(), recustomer: true }),
+        body: JSON.stringify({ ...buildPatch(), recustomer: true, version: await currentVersion() }),
       });
       return (await res.json()) as { deliveryRedetected?: boolean; crossCategory?: boolean };
     },
@@ -1838,7 +1852,7 @@ const OrderDetail = ({ order, onClose }: {
     mutationFn: async () => {
       await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...buildPatch(), proceededAt: new Date().toISOString() }),
+        body: JSON.stringify({ ...buildPatch(), proceededAt: new Date().toISOString(), version: await currentVersion() }),
       });
     },
     onSuccess: () => {
@@ -1860,7 +1874,7 @@ const OrderDetail = ({ order, onClose }: {
     mutationFn: async () => {
       await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ proceededAt: null }),
+        body: JSON.stringify({ proceededAt: null, version: await currentVersion() }),
       });
     },
     onSuccess: () => {
