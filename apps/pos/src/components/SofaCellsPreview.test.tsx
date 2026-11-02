@@ -15,7 +15,7 @@ vi.mock('../lib/sofa-art', () => ({
   measureArtBbox: (src: string) => art.measure(src),
 }));
 
-import { SofaCellsPreview } from './SofaCellsPreview';
+import { SofaCellsPreview, wholeCm } from './SofaCellsPreview';
 
 const SRC = '/sofa-modules/1A(LHF).png';
 const cells = (): Cell[] => [{ id: 'seat', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }];
@@ -63,5 +63,11 @@ describe('SofaCellsPreview image geometry', () => {
     });
     expect(screen.getByRole('img').style.width).toBe('200%');
     expect(screen.getByRole('img').style.left).toBe('-50%');
+  });
+});
+
+describe('wholeCm', () => {
+  it('shows a float sum as whole cm', () => {
+    expect(wholeCm(282.99999999999994)).toBe(283);
   });
 });
