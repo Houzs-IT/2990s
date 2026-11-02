@@ -1679,3 +1679,17 @@ describe('headrestSeatRect', () => {
     expect(headrestSeatRect(hr(200, 400), cells, '24')).toBeNull();
   });
 });
+
+describe('centerCellsWithin — "Change product" reseed (2990-0032/0033)', () => {
+  it('moves a saved top-left layout to mid-room without breaking the join', () => {
+    const cells = [
+      { id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(RHF)', x: 70, y: 0, rot: 0 },
+    ] as Parameters<typeof centerCellsWithin>[0];
+    const out = centerCellsWithin(cells, '24', 600, 480);
+    const bb = cellsBbox(out, '24')!;
+    expect(bb.x + bb.w / 2).toBeCloseTo(300);
+    expect(bb.y + bb.h / 2).toBeCloseTo(240);
+    expect(out[1]!.x - out[0]!.x).toBe(70);
+  });
+});
