@@ -44,8 +44,9 @@ export type PwpRuleInput = {
   active: boolean;
 };
 
-export function usePwpRules() {
+export function usePwpRules(opts?: { enabled?: boolean }) {
   return useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['pwp-rules'],
     queryFn: async () => (await authedFetch<{ rules: PwpRuleRow[] }>('/pwp-rules')).rules,
     staleTime: 30_000,
@@ -113,8 +114,9 @@ export type PwpCodeValidation = {
 };
 
 /** The caller's RESERVED codes (keyed client-side by cartLineKey). */
-export function useMyReservedPwpCodes() {
+export function useMyReservedPwpCodes(opts?: { enabled?: boolean }) {
   return useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ['pwp-codes-mine'],
     queryFn: async () => (await authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/mine')).codes,
     staleTime: 5_000,
@@ -139,7 +141,7 @@ export function useReservePwpCodes() {
     // sofaModules (cell.moduleId[]) lets the server match a SOFA trigger by combo.
     // rewardLine: the line is itself a reward (bought with a code) — promo is
     // one-way (Loo 2026-06-06), so the server skips 'promo' rules for it.
-    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number; rewardLine?: boolean; sofaModules?: string[] }) =>
+    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number; rewardLine?: boolean; sofaModules?: string[]; sofaCellIds?: string[]; sofaAccessories?: Array<{ id: string; modelId: string; cellId: string }> }) =>
       authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/reserve', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-codes-mine'] }); },
   });

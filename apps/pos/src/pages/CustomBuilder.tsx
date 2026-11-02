@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
+import { createPortal } from 'react-dom';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2, Plus, X, SlidersHorizontal, Palette } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, fabricTierAddon, maintActiveValues, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
@@ -25,7 +26,6 @@ import {
   headrestBackTarget,
   headrestSeatRect,
   findDuplicateCombo,
-  matchComboSubset,
   type Bbox,
   type Cell,
   type Depth,
@@ -36,10 +36,13 @@ import {
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, SOFA_BAND, SOFA_INK, type SeamlessRun } from '../lib/sofa-seamless';
 import { canonicalConversion, canonicalMatchesCells } from '../lib/sofa-canonical';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow, type SpecialAddonRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow, type SpecialAddonRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
+import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useMaintainAccess } from '../lib/houzs-perms';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
+import { makeSofaQuickPickLayout, type SofaQuickPickLayout } from '../lib/sofa-quick-pick-layout';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import { SpecialAddonsPicker, sofaBuildCompartments, specialSelsSurchargeFor, type SpecialSel } from '../components/SpecialAddonsPicker';
 import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
@@ -49,6 +52,8 @@ import {
   SOFA_ACCESSORY_ROLE_LABEL,
   accessoriesStillNeeded,
   accessoriesTotalSen,
+  comboAccessories,
+  pricedAccessories,
   accessoryLines,
   accessoryRects,
   boundsWithArms,
@@ -259,7 +264,13 @@ const MIRROR_PAIR: Record<string, string> = {
   'L(RHF)':  'L(LHF)',
 };
 
+function ToolbarPlacement({ target, children }: { target?: HTMLElement | null; children: ReactNode }) {
+  return target ? createPortal(children, target) : children;
+}
+
 interface CustomBuilderProps {
+  /** Android landscape moves the existing live price/actions into the topbar. */
+  toolbarTarget?: HTMLElement | null;
   productId: string;
   productName: string;
   pricing: SofaProductPricing;
@@ -290,6 +301,13 @@ interface CustomBuilderProps {
    *  builder falls back to its legacy pricing.compartments filter + bundled
    *  /sofa-modules/*.png assets. */
   modelCustomizer?: SofaCustomizerData | null;
+  /** Initial module/price readiness; cached data stays usable during refresh. */
+  modelCustomizerState?: 'pending' | 'error' | 'ready';
+  onRetryCustomizer?: () => void;
+  /** The product's fabric gate can arrive before module prices/accessories. */
+  enabledFabricCodes?: string[];
+  /** Module choices may render before initial combo/fabric pricing is ready. */
+  sellingDataReady?: boolean;
   /** mfg_products.base_model — pins the saved Quick Pick to this Model so
    *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
    *  = wildcard (shows for all models). */
@@ -352,6 +370,7 @@ interface CustomBuilderProps {
   /** Sofa Accessory pieces of the cart line being edited (its config.accessories),
    *  put back on the canvas once its modules are. lib/sofa-accessories.ts. */
   initialAccessories?: PlacedAccessory[];
+  onAccessoriesChange?: (pieces: PlacedAccessory[]) => void;
   /** Exchange only: the pieces already on the order, by accessory Model, which
    *  it keeps — they count toward the Model's "Needed to order" rule
    *  (orderPiecesByModel). */
@@ -380,7 +399,8 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, orderPieces = null }: CustomBuilderProps) => {
+export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, modelCustomizerState = 'ready', onRetryCustomizer, enabledFabricCodes, sellingDataReady = true, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, specialAddons, specialSel = [], onSpecialSelChange, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true, layoutOnly, initialAccessories, onAccessoriesChange, orderPieces = null }: CustomBuilderProps) => {
+  const PriceBarTag = toolbarTarget ? 'div' : 'footer';
   const isPhone = useMediaQuery('(max-width: 767px)');
   const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
   const paletteRef = useRef<HTMLDialogElement>(null);
@@ -505,7 +525,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     () => new Map(accessoryOptions.map((o) => [o.modelId, o] as const)),
     [accessoryOptions],
   );
-  const [accessories, setAccessories] = useState<PlacedAccessory[]>([]);
+  const [accessories, setAccessories] = useState<PlacedAccessory[]>(() => initialAccessories?.map((p) => ({ ...p })) ?? []);
   const [selectedAccessoryId, setSelectedAccessoryId] = useState<string | null>(null);
   const [accessoryColourFor, setAccessoryColourFor] = useState<string | null>(null);
   const [accessoryNote, setAccessoryNote] = useState<string | null>(null);
@@ -518,12 +538,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   useEffect(() => () => window.clearTimeout(noteTimerRef.current), []);
   // Editing a cart line: its pieces go back once its modules are on the canvas
   // (the parent hydrates cells in an effect; earlier, every piece would prune).
-  const accessoriesHydratedRef = useRef(false);
+  const accessoriesHydratedRef = useRef(!!initialAccessories?.length);
   useEffect(() => {
     if (accessoriesHydratedRef.current || !initialAccessories?.length || cells.length === 0) return;
     accessoriesHydratedRef.current = true;
     setAccessories(initialAccessories.map((p) => ({ ...p })));
   }, [initialAccessories, cells.length]);
+  useEffect(() => {
+    onAccessoriesChange?.(accessories);
+  }, [accessories, onAccessoriesChange]);
   // Keep pieces in step with the modules — a module removed, turned against
   // another, or an accessory switched off for this Model. Waits for the Model's
   // data, and for a drag to end (draft positions are transient).
@@ -919,18 +942,21 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      exactly rather than on each module before summing — which is the part-
      ringgit defect this port fixes.
      Keep `priceResultSen` for anything that genuinely wants sen/centi. */
-  const priceResultSen = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
+  const priceResultSen = useMemo(() => computeSofaPrice(cells, depth, {
+    ...pricing, accessories: pricedAccessories(accessories, accessoryById),
+  }), [cells, depth, pricing, accessories, accessoryById]);
+  const includedAccessoryIds = useMemo(() => new Set(priceResultSen.groups.flatMap((g) => g.comboMatchedAccessoryIds ?? [])), [priceResultSen]);
   const priceResult = useMemo(() => {
     const rm = (v: number | null | undefined): number | null | undefined =>
-      v == null ? v : Math.round(v / 100);
+      v == null ? v : v / 100;
     return {
-      total: Math.round(priceResultSen.total / 100),
+      total: priceResultSen.total / 100,
       groups: priceResultSen.groups.map((g) => ({
         ...g,
         bundlePrice:          rm(g.bundlePrice) ?? null,
-        aLaCarteTotal:        Math.round(g.aLaCarteTotal / 100),
-        reclinerExtra:        Math.round(g.reclinerExtra / 100),
-        finalPrice:           Math.round(g.finalPrice / 100),
+        aLaCarteTotal:        g.aLaCarteTotal / 100,
+        reclinerExtra:        g.reclinerExtra / 100,
+        finalPrice:           g.finalPrice / 100,
         comboPrice:           rm(g.comboPrice),
         comboSubsetALaCarte:  rm(g.comboSubsetALaCarte),
         comboExtrasALaCarte:  rm(g.comboExtrasALaCarte),
@@ -1145,8 +1171,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     [cells, baseModelOverride, compartmentOverrideMap],
   );
   const fabricCodes = useMemo<string[]>(
-    () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
-    [productId, modelCustomizer],
+    () => (productId?.startsWith('mfg-') ? (enabledFabricCodes ?? modelCustomizer?.fabricIds ?? []) : []),
+    [productId, enabledFabricCodes, modelCustomizer],
   );
   const fabricSeriesRows = useMemo<ProductFabricRow[]>(() => {
     if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
@@ -1163,11 +1189,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      persist the current cell composition as a new Sofa Combo Pricing row
      so it appears in the Quick Pick row next time. */
   const [saveComboOpen, setSaveComboOpen] = useState(false);
-  // Master-Admin "Create Combo" surface (Phase 5) — sets the SELLING price for
-  // the current build; the server auto-detects COST from the module SKUs.
+  // Combo selling prices use the same resolved permission as Products.
   const [createComboOpen, setCreateComboOpen] = useState(false);
   const { data: staff } = useStaff();
   const canCurate = isGlobalCurator(staff?.role);
+  const { canMaintain } = useMaintainAccess();
+  // Combos match within one sofa; disconnected sofas cannot share one rule.
+  const canCreateCombo = canMaintain && !layoutOnly && sellingDataReady
+    && modelCustomizerState === 'ready' && cells.length > 0
+    && accessories.every((piece) => { const option = accessoryById.get(piece.modelId); return option && isPriced(option); })
+    && allClosed && priceResult.groups.length === 1 && (baseModel ?? '').trim() !== '';
   // Restore the parent's selection after a mode switch or cart-line hydration.
   // Guarded so manual changes aren't clobbered while the builder is mounted.
   const fabricHydratedRef = useRef(false);
@@ -1194,8 +1225,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // book whatever the tablet sent for it, RM 0 included.
   const unpricedPieces = useMemo(() => unpricedAccessories(accessories, accessoryById), [accessories, accessoryById]);
   // Pieces on the canvas, in ringgit — added to the Total, sold as their own lines.
-  const accessoriesRm = accessoriesTotalSen(accessories, accessoryById) / 100;
-  const canAdd = cells.length > 0 && allClosed && !stillNeeded && unpricedPieces.length === 0
+  const accessoriesRm = accessoriesTotalSen(accessories.filter((p) => !includedAccessoryIds.has(p.id)), accessoryById) / 100;
+  const canAdd = sellingDataReady && modelCustomizerState === 'ready' && cells.length > 0 && allClosed && !stillNeeded && unpricedPieces.length === 0
     && (!onSwapConfirm || effectiveBuildCount === 1)
     && (!onAddToOrderConfirm || effectiveBuildCount === 1);
 
@@ -1253,8 +1284,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // PWP (换购, Phase 2) — flag the line whose build matches the applied reward
       // combo; its `total` already reflects the combo's PWP price (the parent
       // passes PWP-effective `pricing`). `pwpCode`/`pwpComboIds` are props.
-      const pwpCombo = pwpCode ? (pricing.combos ?? []).find((c) => pwpComboIds.includes(c.id)) : undefined;
-      const isPwpGroup = !!pwpCombo && matchComboSubset(groupCells.map((c) => c.moduleId), pwpCombo.modules) != null;
+      const isPwpGroup = !!pwpCode && !!g.comboId && pwpComboIds.includes(g.comboId);
       // This sofa's Sofa Accessory pieces: kept on the line for Edit, sold as
       // their own lines below — never in `total`.
       const groupCellIds = new Set(groupCells.map((c) => c.id).filter((id): id is string => id != null));
@@ -1306,7 +1336,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       const lineKey = addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
       // Always set, even to none — an edit that took every piece off must drop
       // the line's old accessory lines.
-      if (lineKey) setSofaAccessories(lineKey, accessoryLines(groupPieces, accessoryById, sofaFabric));
+      if (lineKey) setSofaAccessories(lineKey, accessoryLines(groupPieces, accessoryById, sofaFabric, includedAccessoryIds));
       usedEditKey = true;
     }
     onAdded();
@@ -1419,7 +1449,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   /* ─── Render ───────────────────────────────────────────────────── */
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-fit-sofa={toolbarTarget ? '' : undefined}>
       <dialog
         ref={paletteRef}
         open={isPhone ? undefined : true}
@@ -1446,8 +1476,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <span className="t-eyebrow">Modules</span>
           <span className={styles.hint}>Tap to add</span>
         </div>
-        <div className={styles.paletteList}>
-          {(() => {
+        <div className={styles.paletteList} aria-busy={modelCustomizerState === 'pending'}>
+          {modelCustomizerState === 'pending' ? (
+            <p className={styles.hint} role="status">Loading modules…</p>
+          ) : modelCustomizerState === 'error' ? (
+            <div role="alert">
+              <p className={styles.hint}>Could not load modules.</p>
+              {onRetryCustomizer && <Button variant="secondary" onClick={onRetryCustomizer}>Retry</Button>}
+            </div>
+          ) : (() => {
             /* PR — Commander 2026-05-28: when the parent passed a
              * modelCustomizer, use its compartment list (Backend allowed
              * options ∩ master sofaCompartments pool) as the source of
@@ -1535,7 +1572,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               cushions: no limit); drag a piece on the canvas to move it. One
               without a selling price can't be added — Houzs would book whatever
               the tablet sent for it. */}
-          {accessoryOptions.length > 0 && (
+          {modelCustomizerState === 'ready' && accessoryOptions.length > 0 && (
             <div className={styles.paletteGroup}>
               <div className={styles.paletteGroupHead}>Sofa accessories</div>
               {accessoryOptions.map((o) => {
@@ -1565,10 +1602,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             </div>
           )}
         </div>
-        {layoutOnly ? layoutOnly.railBlock : (
+        {layoutOnly ? layoutOnly.railBlock : productId?.startsWith('mfg-') && enabledFabricCodes === undefined && modelCustomizerState !== 'ready' ? (
+          <p className={styles.hint}>{modelCustomizerState === 'pending' ? 'Loading fabrics…' : 'Could not load fabrics.'}</p>
+        ) : (
           <FabricColourPicker
             productFabrics={fabricSeriesRows}
             fabricId={fabricSel?.fabricId ?? null}
+            fabricLabel={fabricSel?.fabricLabel ?? null}
             colourId={fabricSel?.colourId ?? null}
             onChange={(next) => {
               setFabricSel(next);
@@ -1666,6 +1706,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             height: roomH * SCALE,
             transform: `scale(${visualScale})`,
             transformOrigin: 'top left',
+            left: toolbarTarget ? `calc(50% - ${roomW * SCALE * visualScale / 2}px)` : undefined,
+            top: toolbarTarget ? `calc(50% - ${roomH * SCALE * visualScale / 2}px)` : undefined,
           }}
           onPointerDown={(e) => {
             // Click on empty stage (not on a cell or group outline) — deselect.
@@ -2306,14 +2348,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           {cells.length > 0 && allClosed && !layoutOnly && (
             <div className={styles.mobileToolRow}>
               <Button variant="ghost" onClick={() => setSaveComboOpen(true)}>Save as Quick Pick</Button>
-              {canCurate && (baseModel ?? '').trim() !== '' && (
-                <Button variant="ghost" onClick={() => setCreateComboOpen(true)}>Create Combo</Button>
+              {canCreateCombo && (
+                <Button variant="ghost" onClick={() => setCreateComboOpen(true)}>Add to Combo Price</Button>
               )}
             </div>
           )}
         </div>
 
-        {!layoutOnly && <footer className={styles.priceBar}>
+        {!layoutOnly && <ToolbarPlacement target={toolbarTarget}><PriceBarTag className={`${styles.priceBar} ${toolbarTarget ? styles.toolbarPriceBar : ''}`} aria-label="Configuration total and actions">
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             {/* extraAmountRm and the add-ons are per-unit on the LEAD group only
@@ -2362,18 +2404,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Save as Quick Pick
               </Button>
             )}
-            {/* Master Admin only — turn the current build into a priced Combo
-                (set SELLING; server auto-detects COST). A Combo is the invisible
-                selling-price logic; it auto-applies on future module matches.
-                Needs a base_model (the combo is scoped to one Model + the server
-                rejects an empty one), so hide it on legacy/orphan SKUs. */}
-            {cells.length > 0 && allClosed && canCurate && (baseModel ?? '').trim() !== '' && (
+            {/* Authorized price editors can save this sofa's module set as a
+                selling-price rule that applies to future matching builds. */}
+            {canCreateCombo && (
               <Button
                 className={styles.desktopSaveAction}
                 variant="ghost"
                 onClick={() => setCreateComboOpen(true)}
               >
-                Create Combo
+                Add to Combo Price
               </Button>
             )}
             <Button variant="primary" disabled={!canAdd || swapPending || addToOrderPending || (onAddToOrderConfirm && !addEligible)} onClick={handleAdd}>
@@ -2394,9 +2433,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                           : 'Add to cart'}
             </Button>
           </div>
-        </footer>}
+        </PriceBarTag></ToolbarPlacement>}
         {saveComboOpen && (
           <SaveQuickPickModal
+            layout={makeSofaQuickPickLayout(cells, accessories)}
+            accessorySummary={comboAccessories(accessories).map((a) => `${accessoryById.get(a.modelId)?.code ?? a.modelId} × ${a.qty}`).join(' · ')}
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
             baseModel={baseModel ?? ''}
@@ -2405,14 +2446,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             onSaved={() => setSaveComboOpen(false)}
           />
         )}
-        {createComboOpen && (
+        {createComboOpen && canCreateCombo && (
           <CreateComboModal
+            accessories={comboAccessories(accessories)}
+            accessorySummary={comboAccessories(accessories).map((a) => `${accessoryById.get(a.modelId)?.code ?? a.modelId} × ${a.qty}`).join(' · ')}
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
             /* SEN, not the ringgit view — the dialog divides by 100 to seed its
                price field. It was fed the whole-ringgit total before this port,
                so a build showing RM 3,800 seeded the new combo at RM 38. */
-            currentPriceCenti={priceResultSen.total}
+            currentPriceCenti={priceResultSen.total + Math.round(accessoriesRm * 100) - priceResultSen.groups.reduce((sum, group) => sum + group.reclinerExtra, 0)}
             baseModel={baseModel ?? ''}
             onClose={() => setCreateComboOpen(false)}
             onSaved={() => setCreateComboOpen(false)}
@@ -2466,6 +2509,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 <FabricColourPicker
                   productFabrics={fabricSeriesRows}
                   fabricId={piece.fabric?.fabricId ?? null}
+                  fabricLabel={piece.fabric?.fabricLabel ?? null}
                   colourId={piece.fabric?.colourId ?? null}
                   onChange={(sel) => setAccessoryFabric(piece.id, {
                     fabricId: sel.fabricId,
@@ -2498,9 +2542,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
    them across devices — lib/personal-quick-picks.ts). The card's price is
    computed by the engine when shown — nothing is priced here. */
 function SaveQuickPickModal({
-  modules, depth, baseModel, curator, onClose, onSaved,
+  modules, layout, accessorySummary, depth, baseModel, curator, onClose, onSaved,
 }: {
   modules: string[];
+  layout: SofaQuickPickLayout;
+  accessorySummary: string;
   depth: string;
   /** mfg_products.base_model — pins the saved pick to this sofa Model. */
   baseModel: string;
@@ -2524,6 +2570,7 @@ function SaveQuickPickModal({
         await createGlobal.mutateAsync({
           baseModel,
           modules: modules.map((m) => [m]),
+          layout,
           depth: String(depth),
           label: label.trim() || null,
         });
@@ -2534,6 +2581,7 @@ function SaveQuickPickModal({
         await addPersonal.mutateAsync({
           baseModel,
           modules: modules.map((m) => [m]),
+          layout,
           depth: String(depth),
           label: label.trim() || modules.join(' + '),
         });
@@ -2560,10 +2608,10 @@ function SaveQuickPickModal({
           Save as Quick Pick
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Saves this {modules.length}-compartment layout so it&apos;s one tap away next time.
+          Saves this {modules.length}-compartment layout{accessorySummary ? ' with its sofa accessories' : ''} so it&apos;s one tap away next time.
           {curator
             ? ' It joins the shared Quick Picks every tablet sees.'
-            : ' It&apos;s saved to this tablet, under “Yours”.'}
+            : ' It is saved under “Yours” across your devices.'}
           {' '}The price shown follows the live module + combo pricing — nothing is fixed here.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -2581,6 +2629,7 @@ function SaveQuickPickModal({
         </label>
         <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Modules: {modules.join(' · ')}
+          {accessorySummary && <div>Included sofa accessories: {accessorySummary}</div>}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -2593,22 +2642,16 @@ function SaveQuickPickModal({
   );
 }
 
-/* ─── CreateComboModal ───────────────────────────────────────────────────
-   Master Admin only (Phase 5). Turns the current build into a priced Combo —
-   the INVISIBLE selling-price logic that auto-applies whenever a future build
-   matches this module-set. The Master Admin keys the SELLING price for EACH
-   seat height (same grid as the Backend Combo Pricing "New Combo" panel, minus
-   the module picker — modules are already fixed by the build). A blank size = no
-   combo there → that size falls back to the base price. The server auto-detects
-   the COST = Σ the constituent module SKUs' costs (Backend-overridable later).
-   Stored in sofa_combo_pricing, so it also appears on the Backend for cost
-   review. */
+/* Save the current sofa as a POS selling-price rule. Its module set is fixed
+   by the canvas; blank sizes continue to use their normal module prices. */
 function CreateComboModal({
-  modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
+  modules, accessories, accessorySummary, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
   modules: string[];
+  accessories: { modelId: string; qty: number }[];
+  accessorySummary: string;
   depth: string;
-  /** Live à-la-carte total (centi) — a sensible default for the selling price. */
+  /** Base sofa price in sen, excluding upgrades charged separately. */
   currentPriceCenti: number;
   baseModel: string;
   onClose: () => void;
@@ -2617,29 +2660,37 @@ function CreateComboModal({
   const create = useCreateSofaCombo();
   // Active combos for this Model — used to block adding a duplicate (same
   // module-set) on this create path (Chairman 2026-06-02).
-  const existingCombosQ = useSofaCombos(baseModel);
+  const existingCombosQ = useSofaCombos({ baseModel, customerId: null });
   // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
   // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
   // "New Combo" panel uses, so this dialog offers every size that panel does.
   const heightsCfg = useMaintenanceConfig('master');
   // ACTIVE sizes only (owner spec 2026-06-12) — this dialog creates NEW
   // combos, so deactivated seat sizes must not be offered.
-  const heights = heightsCfg.data?.data?.sofaSizes
+  const configuredHeights = heightsCfg.data?.data?.sofaSizes
     ? maintActiveValues(heightsCfg.data.data.sofaSizes)
     : COMBO_HEIGHTS_FALLBACK;
+  // The selected canvas size must have an input even while the pool is loading
+  // (for example 37", which is newer than the legacy fallback).
+  const heights = [...new Set([...configuredHeights, String(depth)])];
   // Seed the current seat depth with the live à-la-carte total (the price the
   // Master Admin is looking at); every other size starts blank — a blank size
   // means "no combo here" → that size uses the base price.
   const [prices, setPrices] = useState<Record<string, string>>(() => ({
-    [String(depth)]: String(Math.round(currentPriceCenti / 100)),
+    [String(depth)]: String(currentPriceCenti / 100),
   }));
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = existingCombosQ.data !== undefined && !existingCombosQ.isFetching
+    && !existingCombosQ.isError && !create.isPending;
 
   const submit = async () => {
+    if (!canSubmit) return;
+    setError(null);
     // Block duplicates: re-adding the same module-set silently makes a new
     // version (append-only table). Warn + stop, and steer to editing instead.
-    const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? []);
+    const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? [], accessories);
     if (dup) {
-      alert(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
+      setError(`This combo already exists for ${baseModel}. Edit it in Products → Combo Price.`);
       return;
     }
     const sellingPricesByHeight: Record<string, number | null> = {};
@@ -2648,28 +2699,33 @@ function CreateComboModal({
       const raw = (prices[h] ?? '').trim();
       if (!raw) { sellingPricesByHeight[h] = null; continue; }
       const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
-      sellingPricesByHeight[h] = Math.round(n * 100);
+      const sen = Math.round(n * 100);
+      if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(sen) || Math.abs(n * 100 - sen) > 0.000001) {
+        setError(`Enter a valid price with up to two decimal places at ${h}".`);
+        return;
+      }
+      sellingPricesByHeight[h] = sen;
       any = true;
     }
-    if (!any) { alert('Enter a price for at least one seat height.'); return; }
+    if (!any) { setError('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
         baseModel,
         // Concrete build → each module is its own singleton OR-set slot.
         modules: modules.map((m) => [m]),
+        accessories,
         tier: 'PRICE_1',   // base tier — fabric tier is a separate flat add-on
         // SELLING price per seat height (centi). COST is auto-detected
         // server-side (Σ module SKU costs). Blank heights = null → base price.
         sellingPricesByHeight,
-        label: null,
+        label: accessories.length ? `${modules.join(' + ')} + ${accessorySummary}` : null,
         effectiveFrom: today,
         notes: 'Combo created from POS Customize',
       });
       onSaved();
     } catch (e) {
-      alert(`Create failed: ${String(e)}`);
+      setError(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -2678,26 +2734,27 @@ function CreateComboModal({
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       padding: '8vh 16px', zIndex: 1000,
-    }} onClick={onClose}>
-      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Create Combo" onClick={(e) => e.stopPropagation()} style={{
+    }} onClick={() => { if (!create.isPending) onClose(); }}>
+      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Add to Combo Price" onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
         padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
-          Create Combo
+          Add to Combo Price
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
           Sets a fixed selling price for this {modules.length}-compartment set at each
-          seat height. It applies automatically whenever a build matches these modules.
-          Leave a size blank to fall back to the base price there. Cost is filled
-          automatically from the module prices — adjust it on the Backend if needed.
+          seat height. It applies when a build includes these modules{accessorySummary ? ' and sofa accessories' : ''}.
+          Leave a size blank to use its normal module prices. Fabric, legs and
+          other add-ons are charged separately.
         </p>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {accessorySummary && <p style={{ margin: 0 }}>These sofa accessories are covered by the combo price. Extra pieces are charged separately.</p>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
             Prices by seat height (RM)
           </span>
-          <div className={styles.comboPrices} style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+          <div className={styles.comboPrices} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))', gap: 8 }}>
             {heights.map((h) => (
               <div key={h}>
                 <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>
@@ -2705,8 +2762,11 @@ function CreateComboModal({
                 </div>
                 <input
                   type="number"
-                  step="1"
+                  step="0.01"
                   min="0"
+                  inputMode="decimal"
+                  aria-label={`Selling price at ${h} inches`}
+                  disabled={create.isPending}
                   value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
@@ -2715,14 +2775,22 @@ function CreateComboModal({
               </div>
             ))}
           </div>
-        </label>
-        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          Modules: {modules.join(' · ')}
         </div>
+        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          {baseModel} · Modules: {modules.join(' · ')}
+          {accessorySummary && <div>Included sofa accessories: {accessorySummary}</div>}
+        </div>
+        {existingCombosQ.isError ? (
+          <div role="alert">
+            Could not check existing combos. Retry before creating a combo.
+            <Button variant="ghost" disabled={existingCombosQ.isFetching} onClick={() => { void existingCombosQ.refetch(); }}>Retry</Button>
+          </div>
+        ) : existingCombosQ.isFetching ? <div role="status">Checking existing combos…</div> : null}
+        {error && <div role="alert">{error}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => { void submit(); }} disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create Combo'}
+          <Button variant="ghost" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+          <Button variant="primary" onClick={() => { void submit(); }} disabled={!canSubmit}>
+            {create.isPending ? 'Creating…' : 'Create combo'}
           </Button>
         </div>
       </div>

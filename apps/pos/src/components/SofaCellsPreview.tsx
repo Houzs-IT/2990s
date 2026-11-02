@@ -3,6 +3,8 @@ import { cellsBbox, findModule, moduleFootprint, groupSofas, isAccessoryModule, 
 import { measureArtBbox, getCachedArtBbox, ART_BBOX_FALLBACK } from '../lib/sofa-art';
 import { renderCornerSofa, cornerCompositeFromCells } from '../lib/sofa-corner';
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat } from '../lib/sofa-seamless';
+import { accessoryRects, boundsWithArms, type PlacedAccessory, type SofaAccessoryOption } from '../lib/sofa-accessories';
+import styles from './SofaCellsPreview.module.css';
 
 const ASSET_BASE = '/sofa-modules';
 
@@ -12,6 +14,8 @@ interface Props {
   className?: string;
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
+  /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
+  dimsLabel?: { w: number; h: number };
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
    *  LARGEST seat size). Keeps the front-back depth at a STABLE screen height
    *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
@@ -28,6 +32,8 @@ interface Props {
    *  layouts come off the canvas as laid out, never re-expressed as a
    *  canonical bundle, so tiling them would not look like the canvas. */
   tileBundles?: boolean;
+  accessories?: readonly PlacedAccessory[];
+  accessoryOptions?: ReadonlyMap<string, SofaAccessoryOption>;
 }
 
 const bundledPng = (moduleId: string): string => `${ASSET_BASE}/${moduleId}.png`;
@@ -54,18 +60,30 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
-export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true }: Props) => {
+export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true, dimsLabel, accessories = [], accessoryOptions = new Map() }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
+    // Cached geometry is already used by this render. Parent updates often
+    // supply a new cells array; do not schedule a second render for every card
+    // when none of its image bounds can change.
+    const srcs = Array.from(new Set(cells.map((c) => artSrc(c.moduleId))))
+      .filter((src) => !getCachedArtBbox(src));
+    if (srcs.length === 0) return;
     let live = true;
-    const srcs = Array.from(new Set(cells.map((c) => artSrc(c.moduleId))));
     void Promise.all(srcs.map(measureArtBbox)).then(() => { if (live) bump((n) => n + 1); });
     return () => { live = false; };
   }, [cells, artSrc]);
 
-  const bb = cellsBbox(cells, depth);
-  if (!bb || bb.w <= 0 || bb.h <= 0) return null;
+  const sofaBox = cellsBbox(cells, depth);
+  if (!sofaBox || sofaBox.w <= 0 || sofaBox.h <= 0) return null;
+  const pieces = accessoryRects(accessories, cells, accessoryOptions, depth);
+  const bb = boundsWithArms(sofaBox, new Set(cells.flatMap((cell) => cell.id ? [cell.id] : [])), pieces);
+  const sofaArea: CSSProperties = {
+    position: 'absolute',
+    left: `${(sofaBox.x - bb.x) / bb.w * 100}%`, top: `${(sofaBox.y - bb.y) / bb.h * 100}%`,
+    width: `${sofaBox.w / bb.w * 100}%`, height: `${sofaBox.h / bb.h * 100}%`,
+  };
 
   // Corner layouts (corner + 2/3-seater + 1-seater) draw as one connected L
   // instead of tiling per-module PNGs (which leave a step + internal arm). Same
@@ -143,9 +161,9 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
           : { width: `min(100cqw, calc(100cqh * ${bb.w} / ${bb.h}))`, height: 'auto' }),
       }}
     >
-      {corner && renderCornerSofa(corner.geo)}
+      {corner && <div style={sofaArea}>{renderCornerSofa(corner.geo)}</div>}
       {seamless && (
-        <div style={{ position: 'absolute', inset: 0 }}>
+        <div style={sofaArea}>
           {renderSeamlessSofa(seamless, '100%', '100%', artSrc, getCachedArtBbox)}
         </div>
       )}
@@ -205,6 +223,18 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
         );
       })}
 
+      {pieces.map(({ id, role, rect }) => (
+        <span
+          key={id}
+          className={`${styles.accessory} ${role === 'arm' ? styles.arm : role === 'back-support' ? styles.support : styles.back}`}
+          title={accessoryOptions.get(accessories.find((piece) => piece.id === id)?.modelId ?? '')?.code}
+          data-accessory-id={id}
+          style={{ left: `${(rect.x - bb.x) / bb.w * 100}%`, top: `${(rect.y - bb.y) / bb.h * 100}%`, width: `${rect.w / bb.w * 100}%`, height: `${rect.h / bb.h * 100}%` }}
+        >
+          <span className={styles.seam} />
+        </span>
+      ))}
+
       {showDims && (
         <>
           {/* Top width dim — ticks + line spanning the box, label centred over it. */}
@@ -212,14 +242,14 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
             <span style={tickV} />
             <span style={lineH} />
             <span style={tickV} />
-            <span style={dimLabel}>{bb.w}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.w ?? bb.w}<span style={dimUnit}>cm</span></span>
           </div>
           {/* Right depth dim — same, rotated to the right edge. */}
           <div style={dimRight} aria-hidden="true">
             <span style={tickH} />
             <span style={lineV} />
             <span style={tickH} />
-            <span style={dimLabel}>{bb.h}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.h ?? bb.h}<span style={dimUnit}>cm</span></span>
           </div>
         </>
       )}

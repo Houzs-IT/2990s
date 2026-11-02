@@ -32,9 +32,14 @@ const inList = (modelId: string | null, list: string[]): boolean =>
 export function usePwpCodeSync(): void {
   const { user } = useAuth();
   const lines = useCart((s) => s.lines);
-  const rulesQ = usePwpRules();
-  const reservedQ = useMyReservedPwpCodes();
-  const quotesQ = useQuotes();
+  // Full-empty transitions intentionally do no reconciliation (see above).
+  // Resume automatically when CartSync restores a cart or a shopper adds a line.
+  const hasCart = lines.length > 0;
+  const enabled = !!user && hasCart;
+  const rulesQ = usePwpRules({ enabled });
+  const reservedQ = useMyReservedPwpCodes({ enabled });
+  // Quotes are needed only to protect reserved codes during an orphan sweep.
+  const quotesQ = useQuotes({ enabled: enabled && (reservedQ.data?.length ?? 0) > 0 });
   const reserve = useReservePwpCodes();
   const free = useFreePwpCodes();
   const busyRef = useRef(false);
@@ -45,10 +50,13 @@ export function usePwpCodeSync(): void {
   const userId = user?.id ?? null;
   const rules = rulesQ.data;
   const reserved = reservedQ.data;
-  const quotes = quotesQ.data;
+  // Resuming a disabled query can expose an old cached quote list while it
+  // refreshes. Never free a quote's codes based on that incomplete snapshot.
+  const quotes = quotesQ.isSuccess && !quotesQ.isFetching ? quotesQ.data : undefined;
 
   useEffect(() => {
     if (!userId) { lastQtyRef.current.clear(); return; }
+    if (!hasCart) return;
     const t = setTimeout(() => { void reconcile(); }, 600);
     return () => clearTimeout(t);
 
@@ -77,11 +85,14 @@ export function usePwpCodeSync(): void {
         for (const l of cart) {
           const c = l.config as {
             kind?: string; productId?: string; category?: string; modelId?: string | null;
-            pwp?: boolean; cells?: Array<{ moduleId?: string }>;
+            pwp?: boolean; cells?: Array<{ id?: string; moduleId?: string }>;
+            accessories?: Array<{ id: string; modelId: string; cellId: string }>;
           };
           if (!c.productId) continue;
           const isReward = c.pwp === true;
           let sofaModules: string[] | undefined;
+          let sofaCellIds: string[] | undefined;
+          let sofaAccessories: Array<{ id: string; modelId: string; cellId: string }> | undefined;
           let isTrigger = false;
           if (c.kind === 'sofa') {
             // By-Combo sofa trigger: send the build's module codes; the server
@@ -104,7 +115,10 @@ export function usePwpCodeSync(): void {
             if (hasSofaComboRule) {
               // Carry modules whenever a combo rule could apply, so a build that
               // satisfies BOTH a combo and a model rule reserves for both.
-              sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
+              const cells = (c.cells ?? []).filter((cell) => !!cell.moduleId);
+              sofaModules = cells.map((cell) => String(cell.moduleId));
+              sofaCellIds = cells.map((cell) => cell.id ?? '');
+              sofaAccessories = (c.accessories ?? []).map(({ id, modelId, cellId }) => ({ id, modelId, cellId }));
             }
             isTrigger = hasSofaModelRule || (hasSofaComboRule && (sofaModules?.length ?? 0) > 0);
           } else {
@@ -123,11 +137,11 @@ export function usePwpCodeSync(): void {
             last.delete(l.key);
             continue;
           }
-          const sig = `${l.qty}:${isReward ? 'R' : ''}:${sofaModules ? sofaModules.join(',') : ''}`;
+          const sig = JSON.stringify([l.qty, isReward, sofaModules, sofaCellIds, sofaAccessories]);
           if (last.get(l.key) === sig) continue;
           await reserve.mutateAsync({
             cartLineKey: l.key, productId: c.productId, qty: l.qty, rewardLine: isReward,
-            ...(sofaModules ? { sofaModules } : {}),
+            ...(sofaModules ? { sofaModules, sofaCellIds, sofaAccessories } : {}),
           });
           mintedThisPass = true;
           last.set(l.key, sig);
@@ -244,7 +258,7 @@ export function usePwpCodeSync(): void {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, lines, rules, reserved, quotes]);
+  }, [userId, hasCart, lines, rules, reserved, quotes]);
 }
 
 /** Mount once inside the providers (see main.tsx), beside <CartSync />. */

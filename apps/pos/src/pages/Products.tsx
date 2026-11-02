@@ -74,7 +74,6 @@ import {
   maintEntryValue,
   maintEntryActive,
   maintEntryWithValue,
-  fillEmptyAllowedOptions,
   type MaintPoolEntry,
   SOFA_MODULES,
   resolveSofaQuickPresets,
@@ -112,7 +111,9 @@ import {
   upsertHeightTierSelling,
 } from '../lib/products/seat-height-selling';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
+import { resolvePhotoUrl } from '../lib/queries';
+import { resolveCompartmentImageSrc, SOFA_COMPARTMENT_API_PREFIX } from '../lib/products/product-photos';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type SpecialAddonCompartmentPrice, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -120,13 +121,19 @@ import {
   type AllowedOptions,
   type ProductModelRow,
 } from '../lib/products/product-models-queries';
+import { modularChipPools, seedModularOptions } from '../lib/products/modular-options';
+import { DrawerShell } from '../components/products/DrawerShell';
+import { ModularBulkDrawer, ModularCategoryMenu } from '../components/products/ModularBulkDrawer';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { groupFabricSeries } from '../lib/fabric-series-groups';
+import { useFabricSeriesNames } from '../lib/fabric-series-queries';
+import { FabricSeriesTierTable } from '../components/products/FabricSeriesTierTable';
 import { FabricAllowedSection } from '../components/products/FabricAllowedSection';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
+import { ACCESSORY_COMBO_TARGET_NOTICE, hasUnsupportedComboTargets } from '../lib/sofa-combo-rule-support';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { compareProductCategories, isSingleSkuCategory, productCategoryChips, productCategoryLabel } from '../lib/products/product-categories';
@@ -261,23 +268,6 @@ const ScopeDeferredNotice = ({
 );
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
-
-/* PR — Commander 2026-05-28 (PHOTO FIX): product_models.photo_url is stored
-   as a relative proxy path (`/product-models/{id}/photo/{key}`) — see
-   apps/api/src/routes/product-models.ts. Rendering it raw in an <img src>
-   resolves against the POS origin (which doesn't host that route) → 404 →
-   broken image / first-letter placeholder. Prefix VITE_API_URL so the URL
-   points at the Worker's public photo proxy. Absolute URLs (http(s)://)
-   pass through untouched. Sister function to resolvePhotoUrl() in
-   lib/queries.ts which the Catalog grid already uses; both branches must
-   stay in sync. */
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => {
-  if (!raw) return null;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (!API_URL) return raw; // local dev — best effort, let it break visibly
-  return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
-};
 
 type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp' | 'campaignPromos';
 
@@ -678,6 +668,9 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
     if (!draft) return;
     setErr(null);
     const target = finalizeRuleTargets(draft.target);
+    if (hasUnsupportedComboTargets(target, combos.data ?? [])) {
+      setErr(ACCESSORY_COMBO_TARGET_NOTICE); return;
+    }
     if (target.length === 0) { setErr('Pick at least one Model.'); return; }
     if (typeof draft.standaloneFee !== 'number' || typeof draft.crossCatFollowupFee !== 'number') {
       setErr('Enter both fees as whole-RM numbers.'); return;
@@ -844,6 +837,8 @@ const numberInputCell = (label: string, value: number | '', setValue: (v: number
 const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
   const canEditAllowed = mode === 'add-only' || mode === 'full';
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  // ⋯ › Edit several models: the category whose drawer is open.
+  const [bulkCategory, setBulkCategory] = useState<string | null>(null);
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const { data: models, isLoading } = useProductModels({
@@ -958,21 +953,28 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
             key={cat}
             style={{ background: 'var(--c-paper)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)' }}
           >
-            <h3
-              style={{
-                margin: 0,
-                marginBottom: 'var(--space-3)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-15)',
-                fontWeight: 600,
-                color: 'var(--c-ink)',
-              }}
-            >
-              <span className={styles.catPill} style={{ marginRight: 8 }}>{productCategoryLabel(cat)}</span>
-              <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
-                {list.length} {list.length === 1 ? 'model' : 'models'}
-              </span>
-            </h3>
+            <div className={styles.sectionHead}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-15)',
+                  fontWeight: 600,
+                  color: 'var(--c-ink)',
+                }}
+              >
+                <span className={styles.catPill} style={{ marginRight: 8 }}>{productCategoryLabel(cat)}</span>
+                <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
+                  {list.length} {list.length === 1 ? 'model' : 'models'}
+                </span>
+              </h3>
+              {canEditAllowed && (
+                <ModularCategoryMenu
+                  label={productCategoryLabel(cat)}
+                  onEditSeveral={() => setBulkCategory(cat)}
+                />
+              )}
+            </div>
             <div
               style={{
                 display: 'grid',
@@ -1030,11 +1032,9 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                   >
                     {m.photo_url ? (
                       <img
-                        /* PR — Commander 2026-05-28: photo_url is a relative
-                           proxy path; prefix VITE_API_URL so the browser
-                           can fetch it from the Worker public photo endpoint
-                           (apps/api/src/routes/product-models.ts). */
-                        src={resolveModelPhotoUrl(m.photo_url) ?? ''}
+                        /* Share the Catalog resolver so photos use the active
+                           Houzs / legacy API, matching the model data source. */
+                        src={resolvePhotoUrl(m.photo_url) ?? ''}
                         alt={`${m.name} photo`}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
@@ -1131,6 +1131,15 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
           onClose={() => setEditingModelId(null)}
         />
       )}
+      {bulkCategory && (
+        <ModularBulkDrawer
+          key={bulkCategory}
+          category={bulkCategory}
+          models={grouped.find(([c]) => c === bulkCategory)?.[1] ?? []}
+          skusByModelId={skusByModelId}
+          onClose={() => setBulkCategory(null)}
+        />
+      )}
     </>
   );
 };
@@ -1166,6 +1175,7 @@ const ModelAllowedOptionsDrawer = ({
   // = fabric_colours. On/off is per colour, stored as allowed_options.fabrics.
   const fabricLib = useFabricLibrary();
   const fabricColours = useFabricColours();
+  const fabricSeriesNames = useFabricSeriesNames();
   // Special Add-ons pool for the per-Model on/off section (migration 0134).
   // MUST stay above the early-return guards below (hooks order — a hook placed
   // after `if (model.isLoading) return` causes a "Rendered more hooks" crash
@@ -1174,10 +1184,10 @@ const ModelAllowedOptionsDrawer = ({
   // Sofa Accessory models a SOFA Model can offer on its canvas (owner
   // 2026-10-16, lib/sofa-accessories.ts). Same hooks-order rule as above.
   const accessoryModels = useProductModels({ category: 'FABRIC_ACCESSORY' });
-  // KN12, KN10 … show as one KN group.
+  // Saved converter series names take precedence over code-derived families.
   const fabricGroups = useMemo(
-    () => groupFabricSeries(fabricLib.data ?? [], fabricColours.data ?? []),
-    [fabricLib.data, fabricColours.data],
+    () => groupFabricSeries(fabricLib.data ?? [], fabricColours.data ?? [], fabricSeriesNames.data ?? []),
+    [fabricLib.data, fabricColours.data, fabricSeriesNames.data],
   );
 
   /* Draft of the allowed_options under edit. Initialised once when the row
@@ -1194,37 +1204,10 @@ const ModelAllowedOptionsDrawer = ({
     const mdl = model.data?.model;
     const mcfg = masterCfg.data?.data;
     if (!mdl || !mcfg || draft != null) return;
-    const saved = JSON.parse(JSON.stringify(mdl.allowed_options ?? {})) as AllowedOptions;
-    // Seed the leg chips all-on ONLY for an UNCONFIGURED Model (leg_heights key
-    // absent) — a sensible "offer every leg" default so staff untick-to-exclude.
-    // If the key is PRESENT (even []), the Model was explicitly configured, so we
-    // render its saved set as-is: a saved [] means "offer no legs" and must show
-    // every chip OFF (owner 2026-06-16 — staff want to be able to turn all legs
-    // off). Mirrors useSofaLegHeights' absent=all / present=exact semantics.
-    const legPool =
-      mdl.category === 'SOFA' ? mcfg.sofaLegHeights
-      : mdl.category === 'BEDFRAME' ? mcfg.legHeights
-      : undefined;
-    let seeded = (legPool && !('leg_heights' in saved))
-      ? fillEmptyAllowedOptions(saved, { leg_heights: legPool.map((o) => o.value) })
-      : saved;
-    // Bedframe gaps + divan heights (Loo 2026-08-28). Same ON/OFF ticks as leg
-    // heights, so an option ADDED to Maintenance later can be switched on per
-    // Model instead of staying invisible in the POS configurator forever.
-    //
-    // Seeded on absent OR empty — deliberately laxer than the leg_heights guard
-    // above. leg_heights distinguishes the two (useSofaLegHeights: absent = all,
-    // present-empty = none); these two pools do NOT. useBedframeCustomizerData's
-    // gate() and the server's hasRestriction() both read a present-but-EMPTY list
-    // as "no restriction = offer everything", so rendering that state as
-    // all-chips-OFF would lie about what the configurator actually does.
-    if (mdl.category === 'BEDFRAME') {
-      seeded = fillEmptyAllowedOptions(seeded, {
-        gaps: maintActiveValues(mcfg.gaps),
-        divan_heights: (mcfg.divanHeights ?? []).map((o) => o.value),
-      });
-    }
-    setDraft(seeded);
+    // Legs offered "all" until the Model saves its own list, a bedframe's gaps
+    // and divan heights likewise — lib/products/modular-options.ts, shared with
+    // ⋯ › Edit several models so a chip means the same in both.
+    setDraft(seedModularOptions(mdl, mcfg));
     setShowDraft(modelShownInPos(mdl.active, model.data?.skus ?? []));
   }, [model.data, masterCfg.data, draft]);
 
@@ -1251,46 +1234,25 @@ const ModelAllowedOptionsDrawer = ({
      stay absent from the patched allowed_options on save. */
   const isSofa     = m.category === 'SOFA';
   const isBedframe = m.category === 'BEDFRAME';
-  const isMattress = m.category === 'MATTRESS';
   // Flat categories have no variants — they're sold straight at the SKU Master
   // price, so the option pickers (sizes/compartments/etc.) don't apply. Every
   // category but sofa / bedframe / mattress, as in Houzs — a Sofa Accessory
   // model used to fall through to the bedframe size pool here.
   const isFlatCategory = isSingleSkuCategory(m.category);
 
-  /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
-     PricedOption[], we project just the .value field for the chip text. */
-  const pricedValues = (arr: PricedOption[] | undefined): string[] =>
-    (arr ?? []).map((p) => p.value);
-
-  // ACTIVE toggles (owner spec 2026-06-12) — Modular chips offer ACTIVE
-  // values only; already-ticked inactive values still render via the
-  // allowed_options union downstream.
-  const sizePool: string[] = isSofa
-    ? (cfg.sofaSizes ? maintActiveValues(cfg.sofaSizes) : ['24', '26', '28', '30', '32', '35'])
-    : isMattress
-      ? maintActiveValues(cfg.mattressSizes)
-      : maintActiveValues(cfg.bedframeSizes);
-  const compartmentPool: string[] = isSofa ? maintActiveValues(cfg.sofaCompartments) : [];
-  // Gaps + divan heights are BEDFRAME-only: the POS configurator renders them
-  // from useBedframeCustomizerData, which is the master Maintenance pool ∩ these
-  // ticks. Divan heights are a PRICED pool (surcharge); gaps a plain string pool.
-  const gapPool: string[]         = isBedframe ? maintActiveValues(cfg.gaps) : [];
-  const divanHeightPool: string[] = isBedframe ? pricedValues(cfg.divanHeights) : [];
-  const legHeightPool: string[]   = isSofa
-    ? pricedValues(cfg.sofaLegHeights)
-    : isBedframe
-      ? pricedValues(cfg.legHeights)
-      : [];
-  // Special Add-ons (migration 0134) — per-Model on/off sources from the
-  // special_addons table filtered by this Model's category, replacing the old
-  // flat cfg.specials / cfg.sofaSpecials pools. Ticks still write
-  // allowed_options.specials by CODE (special_addons.code == the old value), so
-  // every Model's existing on/off is preserved and the server gate is unchanged.
-  // Now also works for MATTRESS Models (the old pools were bedframe/sofa only).
-  const specialAddonPool: string[] = (specialAddons.data ?? [])
-    .filter((a) => a.active && a.categories.includes(m.category))
-    .map((a) => a.code);
+  /* Master pool sources (drawn from MaintenanceConfig), ACTIVE values only
+     (owner spec 2026-06-12) — lib/products/modular-options.ts, shared with
+     ⋯ › Edit several models. Special Add-ons (migration 0134) come off the
+     special_addons rows for this Model's category, ticked by CODE
+     (special_addons.code == the old value), so every Model's existing on/off
+     is preserved and the server gate is unchanged. */
+  const pools = modularChipPools(m.category, cfg, specialAddons.data ?? []);
+  const sizePool = pools.sizes;
+  const compartmentPool = pools.compartments;
+  const gapPool = pools.gaps;
+  const divanHeightPool = pools.divan_heights;
+  const legHeightPool = pools.leg_heights;
+  const specialAddonPool = pools.specials;
   // Sofa Accessories (owner 2026-10-16): ticked ones show in this Model's
   // Custom build palette. Stored by accessory MODEL id — a code rename in Houzs
   // re-points item codes, never ids. One switched off "On the sofa" (owner
@@ -1466,6 +1428,8 @@ const ModelAllowedOptionsDrawer = ({
               <FabricAllowedSection
                 series={fabricGroups.series}
                 coloursBySeries={fabricGroups.coloursBySeries}
+                isLoading={fabricLib.isLoading || fabricColours.isLoading || fabricSeriesNames.isLoading}
+                error={fabricLib.error || fabricColours.error || fabricSeriesNames.error}
                 isTicked={(code) => isTicked('fabrics', code)}
                 onToggle={(code) => toggle('fabrics', code)}
                 onSetAll={setFabricsBulk}
@@ -1554,6 +1518,8 @@ const ModelAllowedOptionsDrawer = ({
             <FabricAllowedSection
               series={fabricGroups.series}
               coloursBySeries={fabricGroups.coloursBySeries}
+              isLoading={fabricLib.isLoading || fabricColours.isLoading || fabricSeriesNames.isLoading}
+              error={fabricLib.error || fabricColours.error || fabricSeriesNames.error}
               isTicked={(code) => isTicked('fabrics', code)}
               onToggle={(code) => toggle('fabrics', code)}
               onSetAll={setFabricsBulk}
@@ -1578,65 +1544,6 @@ const ModelAllowedOptionsDrawer = ({
     </DrawerShell>
   );
 };
-
-/** Minimal drawer-shell wrapper. Right-slide panel with backdrop. */
-const DrawerShell = ({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) => (
-  <div
-    role="dialog"
-    aria-label={title}
-    style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0, 0, 0, 0.32)',
-      zIndex: 80,
-      display: 'flex',
-      justifyContent: 'flex-end',
-    }}
-    onClick={onClose}
-  >
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        width: 'min(520px, 100vw)',
-        height: '100%',
-        background: 'var(--c-paper)',
-        boxShadow: '-12px 0 32px rgba(0, 0, 0, 0.18)',
-        padding: 'var(--space-5)',
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
-        <h2 style={{
-          margin: 0,
-          fontFamily: 'var(--font-title)',
-          fontSize: 'var(--fs-20)',
-          fontWeight: 700,
-          color: 'var(--c-ink)',
-        }}>{title}</h2>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className={styles.maintRowIcon}
-          style={{ color: 'var(--fg-muted)' }}
-        >
-          <X {...ICON_PROPS} />
-        </button>
-      </header>
-      <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
-    </div>
-  </div>
-);
 
 /** Chip-picker row used by ModelAllowedOptionsDrawer. */
 const AllowedOptionsSection = ({
@@ -1874,8 +1781,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const canAdd  = mode !== 'view';
   const canEdit = mode === 'full';
   const editMode = canEdit ? editModeRaw : false;
-  // PR #39 — Model filter chip row (visible only on Sofa view).
-  // Distinct base_model values pulled from current rows. 'all' = no filter.
+  // Keep the SKU's base_model as the filter key; display the saved Model name.
   const [modelFilter, setModelFilter] = useState<string>('all');
 
   const { data: products, isLoading, error } = useMfgProducts({
@@ -1885,6 +1791,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // Chips come off the unfiltered list (lib/products/product-categories.ts), so
   // a search never hides one; it is the All view's own query, no extra request.
   const { data: everyProduct } = useMfgProducts();
+  const { data: productModels } = useProductModels();
   const categoryChips = useMemo(
     () => [{ value: 'all', label: 'All' }, ...productCategoryChips((everyProduct ?? []).map((p) => p.category), category)],
     [everyProduct, category],
@@ -1904,12 +1811,22 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // list to a single Model (Hilton bedframes, Purezone mattresses, etc.).
   // ACCESSORY + SERVICE skip the filter — they don't carry a base_model.
   const supportsModelFilter = category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS';
-  const categoryModels = useMemo<string[]>(() => {
+  const categoryModels = useMemo<ModelFilterOption[]>(() => {
     if (!supportsModelFilter) return [];
-    const s = new Set<string>();
-    for (const r of allRows) if (r.base_model) s.add(r.base_model);
-    return Array.from(s).sort();
-  }, [allRows, supportsModelFilter]);
+    const models = (productModels ?? []).filter((model) => model.category === category);
+    const byId = new Map(models.map((model) => [model.id, model]));
+    const byCode = new Map(models.map((model) => [model.model_code, model]));
+    const names = new Map<string, string>();
+    for (const row of allRows) {
+      if (!row.base_model) continue;
+      const model = (row.model_id ? byId.get(row.model_id) : undefined) ?? byCode.get(row.base_model);
+      const name = model?.name.trim();
+      if (name || !names.has(row.base_model)) names.set(row.base_model, name || row.base_model);
+    }
+    return Array.from(names, ([code, name]) => ({ code, name })).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.code.localeCompare(b.code),
+    );
+  }, [allRows, productModels, category, supportsModelFilter]);
 
   // Apply Model filter (only when current category supports it + a specific
   // model is picked).
@@ -2143,89 +2060,96 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
       )}
 
       <div className={styles.tableCard}>
-        <table className={`${styles.table} ${styles.tableCompact}`}>
-          <thead>
-            <tr>
-              {/* PR #82 — leading select-all checkbox. Indeterminate when
-                  partial selection on visible rows. Only admin (canEdit)
-                  sees the bulk-delete checkbox column. */}
-              {canEdit && (
-                <th style={{ width: 32 }}>
-                  <input
-                    type="checkbox"
-                    aria-label="Select all visible SKUs"
-                    checked={allSelected}
-                    ref={(el) => { if (el) el.indeterminate = someSelected; }}
-                    onChange={toggleAllVisible}
-                    style={{ cursor: 'pointer' }}
-                  />
-                </th>
-              )}
-              <th>Product Code</th>
-              <th>Description</th>
-              {isSofaView ? (
-                <>
-                  <th>Model</th>
-                  {sofaSizes.map((s) => (
-                    <th key={s} style={{ textAlign: 'right' }}>{s}</th>
-                  ))}
-                </>
-              ) : isMattressView ? (
-                <>
-                  <th>Branding</th>
-                  <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Price</th>
-                  <th style={{ textAlign: 'right' }}>PWP Price</th>
-                </>
-              ) : (
-                <>
-                  <th>Category</th>
-                  <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Base Price</th>
-                  <th style={{ textAlign: 'right' }}>PWP Price</th>
-                </>
-              )}
-              <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
+        <div
+          className={styles.skuTableScroll}
+          role="region"
+          aria-label="SKU products"
+          tabIndex={0}
+        >
+          <table className={`${styles.table} ${styles.tableCompact}`}>
+            <thead>
               <tr>
-                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
-                  Loading products…
-                </td>
+                {/* PR #82 — leading select-all checkbox. Indeterminate when
+                    partial selection on visible rows. Only admin (canEdit)
+                    sees the bulk-delete checkbox column. */}
+                {canEdit && (
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all visible SKUs"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                      onChange={toggleAllVisible}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
+                )}
+                <th>Product Code</th>
+                <th>Description</th>
+                {isSofaView ? (
+                  <>
+                    <th>Model</th>
+                    {sofaSizes.map((s) => (
+                      <th key={s} style={{ textAlign: 'right' }}>{s}</th>
+                    ))}
+                  </>
+                ) : isMattressView ? (
+                  <>
+                    <th>Branding</th>
+                    <th>Size</th>
+                    <th style={{ textAlign: 'right' }}>Price</th>
+                    <th style={{ textAlign: 'right' }}>PWP Price</th>
+                  </>
+                ) : (
+                  <>
+                    <th>Category</th>
+                    <th>Size</th>
+                    <th style={{ textAlign: 'right' }}>Base Price</th>
+                    <th style={{ textAlign: 'right' }}>PWP Price</th>
+                  </>
+                )}
+                <th style={{ textAlign: 'right' }}>Unit (m³)</th>
               </tr>
-            )}
-            {!isLoading && rows.map((row) => (
-              <ProductRow
-                key={row.id}
-                row={row}
-                editMode={editMode}
-                isSofaView={isSofaView}
-                isMattressView={isMattressView}
-                sofaSizes={sofaSizes}
-                /* Suppliers drawer + bulk-delete checkbox + truck icon are
-                   admin-only (canEdit). sales_director / view roles see
-                   selling prices but never the supplier purchase-cost data. */
-                onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
-                showSelectCol={canEdit}
-                selected={selectedIds.has(row.id)}
-                onToggleSelected={() => toggleRow(row.id)}
-              />
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr>
-                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
-                  <Package size={32} strokeWidth={1.5} />
-                  <div style={{ marginTop: 8 }}>No products yet.</div>
-                  <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                    Run the seed import if you just migrated the schema.
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {isLoading && (
+                <tr>
+                  <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                    Loading products…
+                  </td>
+                </tr>
+              )}
+              {!isLoading && rows.map((row) => (
+                <ProductRow
+                  key={row.id}
+                  row={row}
+                  editMode={editMode}
+                  isSofaView={isSofaView}
+                  isMattressView={isMattressView}
+                  sofaSizes={sofaSizes}
+                  /* Suppliers drawer + bulk-delete checkbox + truck icon are
+                     admin-only (canEdit). sales_director / view roles see
+                     selling prices but never the supplier purchase-cost data. */
+                  onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
+                  showSelectCol={canEdit}
+                  selected={selectedIds.has(row.id)}
+                  onToggleSelected={() => toggleRow(row.id)}
+                />
+              ))}
+              {!isLoading && !error && rows.length === 0 && (
+                <tr>
+                  <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                    <Package size={32} strokeWidth={1.5} />
+                    <div style={{ marginTop: 8 }}>No products yet.</div>
+                    <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                      Run the seed import if you just migrated the schema.
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
         {!isLoading && !error && (
           <div className={styles.tableFoot}>
             <span className={styles.eyebrow}>
@@ -2652,12 +2576,14 @@ const CategoryChip = ({
 
 const MODEL_PILLS_VISIBLE_LIMIT = 12;
 
+type ModelFilterOption = { code: string; name: string };
+
 const ModelFilterRail = ({
   models,
   activeModel,
   onChange,
 }: {
-  models: string[];
+  models: ModelFilterOption[];
   activeModel: string;
   onChange: (m: string) => void;
 }) => {
@@ -2669,15 +2595,16 @@ const ModelFilterRail = ({
   // Model (non-"all") is always promoted into the inline set.
   const { inline, overflow } = useMemo(() => {
     if (models.length <= MODEL_PILLS_VISIBLE_LIMIT) {
-      return { inline: models, overflow: [] as string[] };
+      return { inline: models, overflow: [] as ModelFilterOption[] };
     }
     const head = models.slice(0, MODEL_PILLS_VISIBLE_LIMIT);
     const tail = models.slice(MODEL_PILLS_VISIBLE_LIMIT);
-    if (activeModel !== 'all' && tail.includes(activeModel)) {
+    const active = tail.find((model) => model.code === activeModel);
+    if (activeModel !== 'all' && active) {
       // Promote the active model into the visible row — swap with the last
       // inline pill so the inline count stays stable.
-      const promoted = [...head.slice(0, -1), activeModel];
-      const demoted = [head[head.length - 1]!, ...tail.filter((m) => m !== activeModel)];
+      const promoted = [...head.slice(0, -1), active];
+      const demoted = [head[head.length - 1]!, ...tail.filter((m) => m.code !== activeModel)];
       return { inline: promoted, overflow: demoted };
     }
     return { inline: head, overflow: tail };
@@ -2706,7 +2633,7 @@ const ModelFilterRail = ({
   const filteredOverflow = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return overflow;
-    return overflow.filter((m) => m.toLowerCase().includes(q));
+    return overflow.filter((m) => m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
   }, [overflow, search]);
 
   return (
@@ -2728,11 +2655,11 @@ const ModelFilterRail = ({
       </CategoryChip>
       {inline.map((m) => (
         <CategoryChip
-          key={m}
-          active={activeModel === m}
-          onClick={() => onChange(m)}
+          key={m.code}
+          active={activeModel === m.code}
+          onClick={() => onChange(m.code)}
         >
-          {m}
+          {m.name}
         </CategoryChip>
       ))}
       {overflow.length > 0 && (
@@ -2810,12 +2737,12 @@ const ModelFilterRail = ({
                 )}
                 {filteredOverflow.map((m) => (
                   <button
-                    key={m}
+                    key={m.code}
                     type="button"
                     role="option"
-                    aria-selected={activeModel === m}
+                    aria-selected={activeModel === m.code}
                     onClick={() => {
-                      onChange(m);
+                      onChange(m.code);
                       setOpen(false);
                       setSearch('');
                     }}
@@ -2825,14 +2752,14 @@ const ModelFilterRail = ({
                       fontFamily: 'var(--font-sans)',
                       fontSize: 'var(--fs-13)',
                       padding: '4px var(--space-2)',
-                      background: activeModel === m ? 'var(--c-cream)' : 'transparent',
+                      background: activeModel === m.code ? 'var(--c-cream)' : 'transparent',
                       border: 'none',
                       borderRadius: 'var(--radius-sm)',
                       color: 'var(--c-ink)',
                       cursor: 'pointer',
                     }}
                   >
-                    {m}
+                    {m.name}
                   </button>
                 ))}
               </div>
@@ -3481,29 +3408,6 @@ const parseRmToCenti = (rm: string): number => {
   const n = Number(rm);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 100);
-};
-
-/* PR — Commander 2026-05-28: resolve the per-compartment image source.
- * Three cases:
- *   1) imageKey starts with `sofa-compartments/` — uploaded via the API.
- *      Render via the Worker proxy (`{API}/maintenance-config/sofa-compartments/{code}/photo/{key}`)
- *      so the auth-free public route streams the R2 object.
- *   2) imageKey starts with `sofa-modules/` — legacy bundled SVG, render
- *      from /public.
- *   3) imageKey is an http(s) URL — render directly. */
-const SOFA_COMPARTMENT_API_PREFIX = 'sofa-compartments/';
-const resolveCompartmentImageSrc = (
-  code: string,
-  imageKey: string | undefined,
-): string | null => {
-  if (!imageKey) return null;
-  if (/^https?:\/\//i.test(imageKey)) return imageKey;
-  if (imageKey.startsWith(SOFA_COMPARTMENT_API_PREFIX)) {
-    const API = (import.meta.env.VITE_API_URL ?? '') as string;
-    return `${API}/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo/${encodeURIComponent(imageKey)}`;
-  }
-  // Legacy bundled SVG / PNG from /public.
-  return `/${imageKey}`;
 };
 
 const SofaCompartmentsList = ({
@@ -5066,18 +4970,10 @@ const CodeFormatPanel = ({
    each fabric's SELLING tier. The Δ is added per item to the order total (like
    the delivery fee); the cost/procurement side (fabric_trackings) is untouched.
    ════════════════════════════════════════════════════════════════════════ */
-const FABRIC_TIER_NEXT: Record<string, 'PRICE_1' | 'PRICE_2' | 'PRICE_3'> = {
-  PRICE_1: 'PRICE_2', PRICE_2: 'PRICE_3', PRICE_3: 'PRICE_1',
-};
-const fabricTierShort = (t: string | null | undefined): string =>
-  t ? `Price ${t.replace('PRICE_', '')}` : 'Price 1';
-
 const FabricPricingPanel = () => {
   const canEdit   = useProductsMode() === 'full';
   const cfg       = useFabricTierAddonConfig();
   const updateCfg = useUpdateFabricTierAddonConfig();
-  const fabrics   = useFabricLibrary();
-  const updateTier = useUpdateFabricLibraryTier();
 
   // Per-model special prices (migration 0172).
   const overrides      = useModelFabricTierOverrides();
@@ -5159,12 +5055,6 @@ const FabricPricingPanel = () => {
     } catch (err) { setError(String((err as Error).message ?? err)); }
   };
 
-  const cycle = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
-    if (!canEdit) return;
-    const current = (field === 'sofaTier' ? row.sofaTier : row.bedframeTier) ?? 'PRICE_1';
-    updateTier.mutate({ id: row.id, field, tier: FABRIC_TIER_NEXT[current] ?? 'PRICE_2' });
-  };
-
   const numField = (
     id: string, label: string, hint: string, value: number | '', setValue: (v: number | '') => void,
   ) => (
@@ -5178,24 +5068,6 @@ const FabricPricingPanel = () => {
       <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>{hint}</span>
     </div>
   );
-
-  const tierBtn = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
-    const t = field === 'sofaTier' ? row.sofaTier : row.bedframeTier;
-    return (
-      <button
-        type="button" disabled={!canEdit} onClick={() => cycle(row, field)}
-        title={canEdit ? 'Click to cycle Price 1 → 2 → 3' : undefined}
-        style={{
-          padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default',
-          background: (t && t !== 'PRICE_1') ? 'var(--c-cream)' : 'transparent',
-          fontWeight: (t && t !== 'PRICE_1') ? 600 : 400,
-        }}
-      >
-        {fabricTierShort(t)}
-      </button>
-    );
-  };
 
   return (
     <div style={{ padding: 'var(--space-5)', maxWidth: 820 }}>
@@ -5219,39 +5091,7 @@ const FabricPricingPanel = () => {
         </Button>
       )}
 
-      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Fabric tiers</h3>
-      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
-        {canEdit ? 'Click a tier to cycle Price 1 → 2 → 3. Sofa and bedframe are independent.' : 'Read-only — only Master Admin can change fabric tiers.'}
-      </p>
-      {updateTier.isError && (
-        <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>
-          Tier change failed: {String((updateTier.error as Error)?.message ?? updateTier.error)}
-        </div>
-      )}
-      {fabrics.isLoading ? (
-        <div style={{ color: 'var(--fg-muted)' }}>Loading fabrics…</div>
-      ) : (fabrics.data ?? []).length === 0 ? (
-        <div style={{ color: 'var(--fg-muted)' }}>No fabrics yet — add them in the Backend Fabric Converter.</div>
-      ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 560 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              <th style={{ padding: '6px 8px' }}>Fabric</th>
-              <th style={{ padding: '6px 8px' }}>Sofa tier</th>
-              <th style={{ padding: '6px 8px' }}>Bedframe tier</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(fabrics.data ?? []).map((row) => (
-              <tr key={row.id} style={{ borderTop: '1px solid var(--line)' }}>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{row.label}</td>
-                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'sofaTier')}</td>
-                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'bedframeTier')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <FabricSeriesTierTable canEdit={canEdit} />
 
       <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Per-model special prices</h3>
       <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, analyzeSofa, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, analyzeSofa, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboBuild, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -41,6 +41,7 @@ import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
 import { seedSwapCells, type SwapCellIn } from '../lib/sofa-swap-seed';
+import { priceSofaQuickPickLayout, resolveSofaQuickPickLayout, type SofaQuickPickLayout } from '../lib/sofa-quick-pick-layout';
 import {
   useCart,
   sofaAccessoryConfig,
@@ -55,11 +56,18 @@ import {
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
 import {
   accessoriesStillNeeded,
+  accessoryLines,
+  extraArmsOf,
   fmtAccessoryPrice,
   orderHave,
   orderPiecesByModel,
   readAccessoryOnSofa,
+  pruneAccessories,
+  pricedAccessories,
+  unpricedAccessories,
   type AccessoryFabric,
+  type PlacedAccessory,
+  type SofaAccessoryOption,
 } from '../lib/sofa-accessories';
 import { productCategoryLabel } from '../lib/products/product-categories';
 import {
@@ -75,6 +83,8 @@ import {
 import { authedFetchRaw } from '../lib/apiClient';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { usesAndroidSofaLayout } from '../lib/android-sofa-layout';
+import { IS_SIMULATION } from '../lib/simulation-mode';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
   BedframeOptions,
@@ -248,6 +258,7 @@ interface QuickPickItem {
   label: string | null;
   /** OR-set per slot. Personal picks store flat ids → wrapped as singletons. */
   modules: string[][];
+  layout?: SofaQuickPickLayout | null;
   depth: string;
 }
 
@@ -255,6 +266,11 @@ export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const isPhone = useMediaQuery('(max-width: 767px)');
+  const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1366px)');
+  const androidProductLayout = isTablet && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const isTabletLandscape = useMediaQuery('(min-width: 768px) and (max-width: 1366px) and (orientation: landscape)');
+  const androidSofaLandscape = isTabletLandscape && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const [customToolbarTarget, setCustomToolbarTarget] = useState<HTMLDivElement | null>(null);
   const savedNavigation = useRef(false);
   const [draftBaseline, setDraftBaseline] = useState<string | null>(null);
   const [nestedDraftDirty, setNestedDraftDirty] = useState(false);
@@ -277,6 +293,12 @@ export const Configurator = () => {
     else navigate('/catalog');
   };
   const product = useProduct(productId);
+  // Wait for the product kind before fetching options for another category.
+  // In particular, a sofa never needs the bedframe pools or sibling size SKUs.
+  const pricingKind = product.data?.pricing_kind;
+  const bedframeProductId = pricingKind === 'bedframe_build' ? productId : undefined;
+  const sizedProductId = pricingKind === 'bedframe_build' || pricingKind === 'size_variants' ? productId : undefined;
+  const fabricOptionsProductId = pricingKind === 'bedframe_build' || product.data?.category_id === 'fabric_accessory' ? productId : undefined;
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
   const productFabrics = useProductFabrics(productId);
@@ -331,7 +353,7 @@ export const Configurator = () => {
 
   // Bedframe enabled fabric colour codes = the Model's allowed_options.fabrics
   // (per-Model, set in the Modular drawer). Empty → "No fabrics enabled".
-  const bedframeAllowedFabricsQ = useModelAllowedFabricCodes(productId);
+  const bedframeAllowedFabricsQ = useModelAllowedFabricCodes(fabricOptionsProductId);
   const bedframeFabricCodes = useMemo(() => bedframeAllowedFabricsQ.data ?? [], [bedframeAllowedFabricsQ.data]);
   const bedframeFabricRows = useMemo<ProductFabricRow[]>(
     () => buildFabricSeriesRows(bedframeFabricCodes),
@@ -355,13 +377,14 @@ export const Configurator = () => {
    * in which case CustomBuilder falls back to the legacy
    * product_compartments tick map. Realtime keeps it in sync with commander's
    * Backend edits without a refresh. */
-  const sofaCustomizer = useSofaCustomizerData(productId);
+  const sofaProductId = pricingKind && pricingKind !== 'sofa_build' ? undefined : productId;
+  const sofaCustomizer = useSofaCustomizerData(sofaProductId);
   useSofaCustomizerRealtime(productId);
   // Sofa leg height (Loo 2026-06-03) — options + SELLING price from the master
   // sofaLegHeights pool ∩ this Model's allowed_options.leg_heights. Lifted here
   // so it survives the Quick Pick ⇄ Customize toggle (like sofaSpecialSel) and
   // both modes' rails + all three add paths read one source.
-  const sofaLegOpts = useSofaLegHeights(productId);
+  const sofaLegOpts = useSofaLegHeights(sofaProductId);
   const [sofaLegValue, setSofaLegValue] = useState<string | null>(null);
 
   const [picked, setPicked] = useState<string | null>(null);
@@ -377,6 +400,7 @@ export const Configurator = () => {
   // toggles within this Configurator session. Resets only when Configurator
   // unmounts (Back button → leave the product page).
   const [sofaCells, setSofaCells] = useState<Cell[]>([]);
+  const [customAccessories, setCustomAccessories] = useState<PlacedAccessory[]>([]);
   // Sofa Quick-Pick toolbar state. quickFlip controls the L/R orientation of
   // L-shape bundles (2+L, 3+L); activeDepth toggles 24"/28" seat depth which
   // affects per-cushion footprint (~10cm wider per cushion at 28"). Both
@@ -402,7 +426,7 @@ export const Configurator = () => {
   const [sofaSpecialSel, setSofaSpecialSel] = useState<SpecialSel[]>([]);
   const [mattressSpecialSel, setMattressSpecialSel] = useState<SpecialSel[]>([]);
 
-  const sizes = useProductSizes(productId);
+  const sizes = useProductSizes(sizedProductId);
   const sizeLib = useSizeLibrary();
   const addons = useAddons();
   /* Commander 2026-05-28 — Sofa Combo Pricing from Backend surfaces in
@@ -411,11 +435,13 @@ export const Configurator = () => {
      base_model comes from the useProduct mfg fallback path (added
      2026-05-28). Null/undefined → no filter → shows all combos (safe
      fallback for legacy UUID products that don't have a base_model). */
-  const sofaCombosQ = useSofaCombos(product.data?.base_model);
+  const sofaCombosQ = useSofaCombos(product.data?.base_model, { enabled: pricingKind === 'sofa_build' });
   // Quick Picks (Phase 5) — saved LAYOUTS the salesperson taps to start.
   // GLOBAL layer (Master-Admin-curated, shared) + PERSONAL "Yours" (per-device).
   // Combos stay invisible: they auto-apply via the engine on module match.
-  const globalQPsQ = useSofaQuickPicks(product.data?.base_model);
+  const globalQPsQ = useSofaQuickPicks(product.data?.base_model, {
+    enabled: pricingKind === 'sofa_build' && !!product.data?.base_model,
+  });
   useSofaQuickPicksRealtime();
   const deleteGlobalQP = useDeleteSofaQuickPick();
   // Personal Quick Picks are now DB-backed (WS1) so they follow the salesperson
@@ -427,6 +453,7 @@ export const Configurator = () => {
   const deletePersonalQP = useDeletePersonalQuickPick();
   const canCurateQP = isGlobalCurator(staff?.role);
   const addConfigured = useCart((s) => s.addConfigured);
+  const setSofaAccessories = useCart((s) => s.setSofaAccessories);
   const cartLines = useCart((s) => s.lines);
 
   // Unified Quick Pick list: global first, then this salesperson's personal
@@ -440,7 +467,7 @@ export const Configurator = () => {
     () => (globalQPsQ.data ?? [])
       .filter((r) => !!baseModelStr && r.baseModel === baseModelStr)
       .map((r) => ({
-        id: r.id, source: 'global' as const, label: r.label, modules: r.modules, depth: r.depth,
+        id: r.id, source: 'global' as const, label: r.label, modules: r.modules, layout: r.layout, depth: r.depth,
       })),
     [globalQPsQ.data, baseModelStr],
   );
@@ -449,7 +476,7 @@ export const Configurator = () => {
     // model, and stores modules as string[][] (OR-set slots) — use them as-is.
     () => (myQPsQ.data ?? []).map((p) => ({
       id: p.id, source: 'personal' as const, label: p.label,
-      modules: p.modules, depth: p.depth,
+      modules: p.modules, layout: p.layout, depth: p.depth,
     })),
     [myQPsQ.data],
   );
@@ -654,8 +681,8 @@ export const Configurator = () => {
   // Bedframe colour + option libraries (also used by <BedframeOptions>; React
   // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
   // when editing a bedframe line.
-  const bedframeColours = useBedframeColours(productId);
-  const bedframeOptions = useBedframeCustomizerData(productId);
+  const bedframeColours = useBedframeColours(bedframeProductId);
+  const bedframeOptions = useBedframeCustomizerData(bedframeProductId);
   // Special Add-ons (migration 0134) — the Model's allowed codes ∩ the active
   // BEDFRAME add-ons. Drives the BedframeOptions picker + edit-hydration. These
   // hooks MUST stay above the `if (product.isLoading) return` guard below
@@ -864,12 +891,14 @@ export const Configurator = () => {
   // • Legacy UUID products: use useProductFabrics as before (product_fabrics rows).
   // Declared here (before the edit-hydration useEffect) so it's in scope for both
   // the hydration logic and the FabricColourPicker render below.
-  // Sofa enabled fabric colour codes: mfg → the Model's allowed_options.fabrics
-  // (via sofaCustomizer); legacy UUID products keep their product_fabrics rows
-  // (no colour gate). Empty → "No fabrics enabled".
+  // The product already carries its Model's fabric gate. Show fabrics while
+  // module prices/accessories are still loading; once resolved, prefer the
+  // customizer's refreshed gate. Legacy products keep product_fabrics rows.
   const sofaFabricCodes = useMemo<string[]>(
-    () => (productId?.startsWith('mfg-') ? (sofaCustomizer.data?.fabricIds ?? []) : []),
-    [productId, sofaCustomizer.data],
+    () => (productId?.startsWith('mfg-')
+      ? (sofaCustomizer.data?.fabricIds ?? product.data?.model_allowed_options?.fabrics ?? [])
+      : []),
+    [productId, sofaCustomizer.data, product.data],
   );
   const derivedFabricRows = useMemo<ProductFabricRow[]>(() => {
     if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
@@ -1008,13 +1037,14 @@ export const Configurator = () => {
       if (cfg.cells && cfg.cells.length > 0) {
         setMode('custom');
         setSofaCells(cfg.cells);
+        setCustomAccessories(cfg.accessories ?? []);
         // PWP (换购) — re-arm the saved voucher via the cross-order path. Match
         // the saved build against the loaded combos so the live total + chip
         // reflect the PWP price; the server re-validates + locks it at Confirm.
         if (cfg.pwp && cfg.pwpCode) {
           const builtMods = cfg.cells.map((c) => c.moduleId).filter(Boolean);
           const matched = (sofaCombosQ.data ?? [])
-            .filter((c) => matchComboSubset(builtMods, c.modules) != null)
+            .filter((c) => matchComboBuild({ modules: builtMods, cellIds: cfg.cells!.map((cell) => cell.id ?? ''), accessories: cfg.accessories }, c) != null)
             .map((c) => c.id);
           setSofaPwpCode(cfg.pwpCode);
           setSofaPwpInput(cfg.pwpCode);
@@ -1178,21 +1208,17 @@ export const Configurator = () => {
     };
   }, [sofaPricing, sofaPwpComboIds]);
 
-  // Price a Quick Pick LAYOUT (Chairman 2026-05-31): run its modules through the
-  // SAME engine the build uses — à-la-carte module sum, or the Combo price when
-  // the layout matches a Combo. One price source (the engine); the QP table
-  // stores none. Returns whole MYR, or null when nothing prices (unpriced).
-  const priceForLayout = useCallback((modules: string[][]): number | null => {
-    const cells = cellsFromComboModules(modules, activeDepth);
-    if (cells.length === 0) return null;
-    /* computeSofaPrice returns SEN as of 2026-08-17 (ported from Houzs). This
-       function's contract is whole MYR — it feeds the Quick Pick card price AND
-       the cart line total, both of which are ringgit — so convert here. The
-       engine now sums every module exactly and rounds ONCE at the end, instead
-       of rounding each module before summing. */
-    const totalSen = computeSofaPrice(cells, activeDepth, effectiveSofaPricing).total;
-    return totalSen > 0 ? Math.round(totalSen / 100) : null;
-  }, [activeDepth, effectiveSofaPricing]);
+  const sofaAccessoryOptions = useMemo(
+    () => new Map((sofaCustomizer.data?.accessories ?? []).map((option) => [option.modelId, option])),
+    [sofaCustomizer.data?.accessories],
+  );
+  // Saved picks carry geometry and pieces, but always read current prices.
+  const priceForLayout = useCallback((modules: string[][], layout?: SofaQuickPickLayout | null, savedDepth?: string): number | null => {
+    const resolved = resolveSofaQuickPickLayout(modules, layout, activeDepth, false, sofaAccessoryOptions, savedDepth as Depth | undefined);
+    if (resolved.cells.length === 0) return null;
+    const { totalSen } = priceSofaQuickPickLayout(resolved, activeDepth, effectiveSofaPricing, sofaAccessoryOptions);
+    return totalSen > 0 ? totalSen / 100 : null;
+  }, [activeDepth, effectiveSofaPricing, sofaAccessoryOptions]);
 
   // ── Sofa PWP voucher (2026-06-02) — redeem control lifted to the shared top
   // bar so BOTH Quick Pick + Customize can apply a code. PWP applies only to
@@ -1223,10 +1249,23 @@ export const Configurator = () => {
   // snapshot (and the server reprices from). Memoized once so the priced Δ and
   // the stored cells can never diverge. Empty for bedframe / non-sofa lines.
   // Hoisted above the guard with effectiveQPModules (Rules of Hooks).
-  const qpCells = useMemo(
-    () => (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []),
-    [effectiveQPModules, activeDepth],
+  const qpLayout = useMemo(
+    () => pickedQP
+      ? resolveSofaQuickPickLayout(pickedQP.modules, pickedQP.layout, activeDepth, qpMirror, sofaAccessoryOptions, pickedQP.depth as Depth)
+      : { cells: [], accessories: [] },
+    [pickedQP, activeDepth, qpMirror, sofaAccessoryOptions],
   );
+  const qpCells = qpLayout.cells;
+  const qpPrice = useMemo(
+    () => priceSofaQuickPickLayout(qpLayout, activeDepth, effectiveSofaPricing, sofaAccessoryOptions),
+    [qpLayout, activeDepth, effectiveSofaPricing, sofaAccessoryOptions],
+  );
+  const qpAccessoriesInvalid = qpLayout.accessories.some((piece) => !sofaAccessoryOptions.has(piece.modelId))
+    || unpricedAccessories(qpLayout.accessories, sofaAccessoryOptions).length > 0
+    || pruneAccessories(qpLayout.accessories, qpCells, sofaAccessoryOptions, activeDepth).length !== qpLayout.accessories.length;
+  // Existing-order callbacks currently accept only the sofa line, so a saved
+  // set with pieces must be placed through the cart to preserve its child lines.
+  const qpAccessoriesNeedCart = qpLayout.accessories.length > 0 && (isSwapMode || isAddToOrderMode);
   // Sofa Accessories each sofa of this Model must carry before it is ordered
   // (Modular › Needed to order, owner 2026-10-16). Pieces go on only in
   // Customize on a new order; an exchange keeps the order's other lines, so the
@@ -1236,18 +1275,17 @@ export const Configurator = () => {
     () => (isSwapMode && swapPiecesQ.data ? orderPiecesByModel(swapPiecesQ.data, sofaCustomizer.data?.accessories ?? []) : null),
     [isSwapMode, swapPiecesQ.data, sofaCustomizer.data],
   );
-  // Quick Pick adds no pieces, so a layout the rule wants them on is refused.
-  // A saved layout's arms are read off its cells; a bundle preset has its own.
+  // A saved layout's attached pieces satisfy the same requirements as Customize.
   const qpStillNeeded = useMemo(() => {
     const needed = sofaCustomizer.data?.accessoriesNeeded ?? [];
     if (needed.length === 0) return null;
-    const ends = qpCells.length > 0 ? analyzeSofa(qpCells, activeDepth) : null;
+    const ends = qpCells.length > 0 ? analyzeSofa(qpCells, activeDepth, { extraArms: extraArmsOf(qpLayout.accessories, qpCells, sofaAccessoryOptions) }) : null;
     const fromOrder = orderHave(needed, orderPieces);
     return accessoriesStillNeeded(needed, {
       armEachEnd: (ends ? ends.leftArm && ends.rightArm : true) || fromOrder.arms >= 2,
-      pieces: fromOrder.pieces,
+      pieces: new Set([...fromOrder.pieces, ...qpLayout.accessories.filter((piece) => sofaAccessoryOptions.has(piece.modelId)).map((piece) => piece.modelId)]),
     });
-  }, [sofaCustomizer.data, qpCells, activeDepth, orderPieces]);
+  }, [sofaCustomizer.data, qpCells, qpLayout.accessories, sofaAccessoryOptions, activeDepth, orderPieces]);
   // An exchange that can't keep its pieces waits for the order's lines.
   const piecesLoading = isSwapMode && (sofaCustomizer.data?.accessoriesNeeded.length ?? 0) > 0 && swapPiecesQ.isLoading;
 
@@ -1262,9 +1300,17 @@ export const Configurator = () => {
   );
 
   // Combo ids the current build matches — the reward a sofa code must name.
+  const sofaComboBuild = useMemo(() => {
+    const cells = mode === 'custom' ? sofaCells : qpCells;
+    return {
+      modules: cells.map((cell) => cell.moduleId),
+      cellIds: cells.map((cell) => cell.id ?? ''),
+      accessories: mode === 'custom' ? customAccessories : qpLayout.accessories,
+    };
+  }, [mode, sofaCells, qpCells, customAccessories, qpLayout.accessories]);
   const sofaMatchedComboIds = useMemo(
-    () => (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null).map((c) => c.id),
-    [sofaPricing.combos, sofaBuiltModules],
+    () => (sofaPricing.combos ?? []).filter((c) => matchComboBuild(sofaComboBuild, c) != null).map((c) => c.id),
+    [sofaPricing.combos, sofaComboBuild],
   );
 
   // Same-cart: the next RESERVED sofa code in THIS cart whose reward matches the
@@ -1386,7 +1432,7 @@ export const Configurator = () => {
     }
     setSofaPwpChecking(true); setSofaPwpErr(null);
     try {
-      const matched = (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null);
+      const matched = (sofaPricing.combos ?? []).filter((c) => matchComboBuild(sofaComboBuild, c) != null);
       if (matched.length === 0) { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr('This build does not match any sofa combo.'); return; }
       let okCombo: string | null = null;
       for (const c of matched) {
@@ -1404,7 +1450,13 @@ export const Configurator = () => {
   // without a reset effect (the engine also won't apply a non-matching combo, so
   // the price stays correct); the code is cleared outright only on a product
   // switch (the productId reset above).
-  const sofaPwpApplied = sofaPwpCode != null && sofaPwpComboIds.some((id) => sofaMatchedComboIds.includes(id));
+  const sofaAppliedComboIds = useMemo(() => {
+    const price = mode === 'custom'
+      ? computeSofaPrice(sofaCells, activeDepth, { ...effectiveSofaPricing, accessories: pricedAccessories(customAccessories, sofaAccessoryOptions) })
+      : qpPrice.sofaPrice;
+    return price.groups.flatMap((group) => group.comboId ? [group.comboId] : []);
+  }, [mode, sofaCells, activeDepth, effectiveSofaPricing, customAccessories, sofaAccessoryOptions, qpPrice.sofaPrice]);
+  const sofaPwpApplied = sofaPwpCode != null && sofaPwpComboIds.some((id) => sofaAppliedComboIds.includes(id));
 
   /* ── Free Item Campaign coverage (Task 8) — addToOrder mode only ────────
      Mirrors CartContents: compute which active campaigns cover the currently-
@@ -1972,7 +2024,7 @@ export const Configurator = () => {
     }
     return pickedQP.label!;
   })();
-  const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
+  const qpPickPrice = pickedQP ? qpPrice.totalSen / 100 : 0;
 
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
@@ -2013,14 +2065,20 @@ export const Configurator = () => {
   // still demands fabricCode + legHeight before a Processing date / Proceed
   // (shared so-variant-rule, API 409 variants_incomplete), so the order can't
   // reach production unconfirmed.
-  const canAddSofa =
+  // Showing options early must not let a restored/quick-pick build commit
+  // before its initial prices or required-accessory rules have arrived.
+  const sofaSellingDataReady = sofaCustomizer.data !== undefined
+    && sofaCombosQ.data !== undefined
+    && (!fabricSel || (addonCfgQ.data !== undefined
+      && modelOverridesQ.data !== undefined && compartmentOverridesQ.data !== undefined));
+  const canAddSofa = sofaSellingDataReady &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
      (pickedQP != null && qpPickPrice > 0))
-    && !qpStillNeeded && !piecesLoading;
+    && !qpStillNeeded && !piecesLoading && !qpAccessoriesInvalid && !qpAccessoriesNeedCart;
 
   // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
-    if (pickedSofaRow == null || pickedSofaRow.price == null) return;
+    if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
     const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
     const snapshot: SofaConfigSnapshot = {
@@ -2068,6 +2126,7 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
+    if (!canAddSofa) return;
     if (pickedQP == null || effectiveQPModules == null) return;
     const cells = qpCells;
     const label = qpDisplayLabel;
@@ -2075,8 +2134,7 @@ export const Configurator = () => {
     // PWP (换购) — stamp the line when this layout matches the applied reward
     // combo; total already reflects the PWP price (effectiveSofaPricing). The
     // server re-validates the code + locks the combo PWP price at Confirm.
-    const pwpCombo = sofaPwpCode ? (sofaPricing.combos ?? []).find((c) => sofaPwpComboIds.includes(c.id)) : undefined;
-    const isPwp = !!pwpCombo && matchComboSubset(cells.map((c) => c.moduleId).filter(Boolean), pwpCombo.modules) != null;
+    const isPwp = !!sofaPwpCode && qpPrice.sofaPrice.groups.some((group) => !!group.comboId && sofaPwpComboIds.includes(group.comboId));
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -2105,12 +2163,14 @@ export const Configurator = () => {
       ...(lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
       ...(lineExtraNote.trim() ? { extraAddonNote: lineExtraNote.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
-      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
+      ...(qpLayout.accessories.length > 0 ? { accessories: qpLayout.accessories } : {}),
+      total: qpPrice.sofaPrice.total / 100 + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     if (isSwapMode) { void confirmSwap(snapshot); return; }
     if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
-    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    const sofaKey = addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    if (sofaKey) setSofaAccessories(sofaKey, accessoryLines(qpLayout.accessories, sofaAccessoryOptions, fabricSel, qpPrice.includedAccessoryIds));
     navigateAfterSave(isEditing ? '/cart' : '/catalog');
   };
 
@@ -2121,9 +2181,9 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout ? (p.category_id ?? '').toUpperCase() : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
-        <span className={styles.topbarChipName}>
+        <span className={styles.topbarChipName} title={p.name}>
           {p.name}
           {pickedSize ? ` · ${pickedSize.label}` : ''}
         </span>
@@ -2169,9 +2229,9 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout ? (p.category_id ?? '').toUpperCase() : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
-        <span className={styles.topbarChipName}>
+        <span className={styles.topbarChipName} title={p.name}>
           {p.name}
           {pickedSize ? ` · ${pickedSize.label}` : ''}
           {isDivan ? ' · Divan' : ''}
@@ -2219,7 +2279,7 @@ export const Configurator = () => {
           keeps its desktop width there and the layout name shows in full. */}
       <span className={`${styles.topbarChip} ${styles.topbarChipWide}`}>
         <span className={styles.topbarChipEyebrow}>
-          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
+          {androidProductLayout && !pickedQP && !pickedSofaRow ? 'SOFA' : `${(p.name ?? '').toUpperCase()} · ${(p.category_id ?? '').toUpperCase()}`}
         </span>
         <span className={styles.topbarChipName}>
           {pickedQP
@@ -2380,8 +2440,18 @@ export const Configurator = () => {
     <>
     <Topbar
       step={isSofa ? undefined : 'cart'}
+      productConfigurator={isSofa || isSize || isBedframe}
+      sofaConfigurator={isSofa}
       centerSlot={sofaCenterSlot}
-      rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
+      rightSlot={isSofa && mode === 'custom' && androidSofaLandscape
+        ? <div className={styles.customToolbarGroup}>
+            <span className={styles.topbarChip}>
+              <span className={styles.topbarChipEyebrow}>Custom sofa</span>
+              <span className={styles.topbarChipName} title={p.name}>{p.name}</span>
+            </span>
+            <div ref={setCustomToolbarTarget} className={styles.customToolbar} data-sofa-toolbar="" />
+          </div>
+        : sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
       mobileActionsInPage
       mobileCenterInPage
     />
@@ -2413,10 +2483,8 @@ export const Configurator = () => {
         {swapError}
       </div>
     )}
-    {/* Quick Pick adds no Sofa Accessories: a layout this Model's sofas must
-        carry pieces on (Modular › Needed to order) is refused, and this says
-        where they can go on. */}
-    {isSofa && mode === 'quick' && (pickedQP != null || pickedSofaRow != null) && qpStillNeeded && (
+    {isSofa && mode === 'quick' && (pickedQP != null || pickedSofaRow != null)
+      && (qpStillNeeded || qpAccessoriesInvalid || qpAccessoriesNeedCart) && (
       <div
         role="status"
         className={noticeClass}
@@ -2427,12 +2495,15 @@ export const Configurator = () => {
           fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
         }}
       >
-        {qpStillNeeded.full}
-        {isSwapMode
-          ? ' — this order doesn’t have them, and pieces can only be added on a new order.'
-          : isAddToOrderMode
-            ? ' — pieces can only be added on a new order.'
-            : ' — switch to Customize to add them.'}
+        {qpAccessoriesNeedCart
+          ? 'This Quick Pick includes sofa accessories. Add the complete set through a new order.'
+          : qpAccessoriesInvalid
+            ? 'Some saved sofa accessories are unavailable, unpriced or no longer fit. Open Customize to review this layout.'
+            : <>{qpStillNeeded?.full}{isSwapMode
+              ? ' — this order doesn’t have them, and pieces can only be added on a new order.'
+              : isAddToOrderMode
+                ? ' — pieces can only be added on a new order.'
+                : ' — switch to Customize to add them.'}</>}
       </div>
     )}
     {/* Add-to-placed-SO — eligibility notice (not eligible) + error surface. */}
@@ -2486,6 +2557,7 @@ export const Configurator = () => {
       </div>
     )}
     <main
+      data-fit-sofa={isSofa && mode === 'custom' && androidSofaLandscape ? '' : undefined}
       onPointerDownCapture={captureDraftBaseline}
       onKeyDownCapture={captureDraftBaseline}
       onClickCapture={captureDraftBaseline}
@@ -2553,6 +2625,7 @@ export const Configurator = () => {
             personalQuickPicks={personalQPItems}
             pickedQuickPickId={pickedQP?.id ?? null}
             priceForLayout={priceForLayout}
+            accessoryOptions={sofaAccessoryOptions}
             canDeleteGlobal={canCurateQP}
             onQuickPickSelect={(item) => {
               // Select the saved Quick Pick — stay in Quick Pick mode.
@@ -2569,7 +2642,9 @@ export const Configurator = () => {
             onQuickPickEdit={(item) => {
               // Load into Customize for further adjustment, centered in the room
               // (like tap-to-add) rather than pinned to the top-left corner.
-              setSofaCells(centerCellsInRoom(cellsFromComboModules(item.modules, activeDepth), activeDepth));
+              const layout = resolveSofaQuickPickLayout(item.modules, item.layout, activeDepth, item.id === pickedQP?.id && qpMirror, sofaAccessoryOptions, item.depth as Depth);
+              setSofaCells(centerCellsInRoom(layout.cells, activeDepth));
+              setCustomAccessories(layout.accessories);
               setMode('custom');
             }}
             onQuickPickDelete={(item) => {
@@ -2580,6 +2655,7 @@ export const Configurator = () => {
               <FabricColourPicker
                 productFabrics={derivedFabricRows}
                 fabricId={fabricSel?.fabricId ?? null}
+                fabricLabel={fabricSel?.fabricLabel ?? null}
                 colourId={fabricSel?.colourId ?? null}
                 onChange={setFabricSel}
                 category="SOFA"
@@ -2605,6 +2681,7 @@ export const Configurator = () => {
           />
         ) : (
           <CustomBuilder
+            toolbarTarget={androidSofaLandscape ? customToolbarTarget : null}
             productId={p.id}
             productName={p.name}
             pricing={effectiveSofaPricing}
@@ -2616,8 +2693,13 @@ export const Configurator = () => {
             setCells={setSofaCells}
             editingKey={isEditing && editKey ? editKey : undefined}
             initialFabric={fabricSel}
-            initialAccessories={isEditing && editingLine?.config.kind === 'sofa' ? editingLine.config.accessories : undefined}
+            initialAccessories={customAccessories}
+            onAccessoriesChange={setCustomAccessories}
             modelCustomizer={modelCustomizerForDepth}
+            modelCustomizerState={sofaCustomizer.data !== undefined ? 'ready' : sofaCustomizer.isError ? 'error' : 'pending'}
+            onRetryCustomizer={() => { void sofaCustomizer.refetch(); }}
+            enabledFabricCodes={productId?.startsWith('mfg-') ? sofaFabricCodes : undefined}
+            sellingDataReady={sofaSellingDataReady}
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}
             pwpBlock={sofaPwpRailSection}
@@ -2781,6 +2863,7 @@ export const Configurator = () => {
                   <FabricColourPicker
                     productFabrics={bedframeFabricRows}
                     fabricId={fabricSel?.fabricId ?? null}
+                    fabricLabel={fabricSel?.fabricLabel ?? null}
                     colourId={fabricSel?.colourId ?? null}
                     onChange={setFabricSel}
                     category="BEDFRAME"
@@ -3272,6 +3355,7 @@ const SofaAccessoryAddToCart = ({ productId, productName, modelId, priceSen, fab
         <FabricColourPicker
           productFabrics={fabricRows}
           fabricId={fabric?.fabricId ?? null}
+          fabricLabel={fabric?.fabricLabel ?? null}
           colourId={fabric?.colourId ?? null}
           onChange={(sel) => {
             setFabric({ fabricId: sel.fabricId, colourId: sel.colourId, fabricLabel: sel.fabricLabel, colourLabel: sel.colourLabel, colourHex: sel.colourHex });
@@ -3360,7 +3444,8 @@ interface SofaQuickPickProps {
   pickedQuickPickId?: string | null;
   /** Price a layout via the engine (à-la-carte sum, or a matched Combo's
    *  price). Whole MYR, or null when the layout doesn't price. */
-  priceForLayout?: (modules: string[][]) => number | null;
+  priceForLayout?: (modules: string[][], layout?: SofaQuickPickLayout | null, savedDepth?: string) => number | null;
+  accessoryOptions?: ReadonlyMap<string, SofaAccessoryOption>;
   /** true → this user may delete GLOBAL picks (Master Admin / backend admin). */
   canDeleteGlobal?: boolean;
   /** Select a Quick Pick — stay in Quick Pick mode, topbar shows price + Add. */
@@ -3401,6 +3486,8 @@ const useSilhouetteBounds = (src: string): SilhouetteBounds | null => {
     () => silhouetteBoundsCache.get(src) ?? null,
   );
   useEffect(() => {
+    // Composed and saved layouts render their own cells and have no hero PNG.
+    if (!src) return;
     const cached = silhouetteBoundsCache.get(src);
     if (cached) {
       setBounds(cached);
@@ -3485,7 +3572,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, pwpBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, pwpBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, accessoryOptions, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -3537,8 +3624,11 @@ export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFl
   // shrinking the whole plan-view (the single-PNG hero already does this via
   // scaleX). pickedQPRow → saved-layout hero; heroCells → console/corner preset.
   const qpAnchorAspect = pickedQPRow
-    ? layoutAnchorAspect(cellsFromComboModules(pickedQPRow.modules, maxDepth), maxDepth)
+    ? layoutAnchorAspect(resolveSofaQuickPickLayout(pickedQPRow.modules, pickedQPRow.layout, maxDepth, qpMirror, accessoryOptions, pickedQPRow.depth as Depth).cells, maxDepth)
     : undefined;
+  const heroLayout = pickedQPRow
+    ? resolveSofaQuickPickLayout(pickedQPRow.modules, pickedQPRow.layout, depth, qpMirror, accessoryOptions, pickedQPRow.depth as Depth)
+    : null;
   const presetAnchorAspect = pickedRow && heroCells
     ? layoutAnchorAspect(buildPresetCells(pickedRow.bundle.id, maxDepth) ?? [], maxDepth)
     : undefined;
@@ -3629,7 +3719,8 @@ export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFl
             </header>
             <div className={styles.qpGrid}>
               {items.map((item) => {
-                const priceRm = priceForLayout?.(item.modules) ?? null;
+                const priceRm = priceForLayout?.(item.modules, item.layout, item.depth) ?? null;
+                const layout = resolveSofaQuickPickLayout(item.modules, item.layout, depth, false, accessoryOptions, item.depth as Depth);
                 /* Same label rule as the topbar: curated names survive,
                    code-join labels re-read in walk order — otherwise the card
                    under the topbar would show the rejected slot order. */
@@ -3652,12 +3743,13 @@ export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFl
                       title={qpWalkLabel(item.modules, depth) ?? item.modules.map((s) => s[0] ?? '').join(' + ')}
                     >
                     <div className={styles.qpCardArt}>
-                      <SofaCellsPreview cells={cellsFromComboModules(item.modules, depth)} depth={depth} />
+                      <SofaCellsPreview cells={layout.cells} depth={depth} accessories={layout.accessories} accessoryOptions={accessoryOptions} />
                     </div>
                     <div className={styles.qpCardBody}>
                       <span className={styles.qpCardLabel}>{label}</span>
                       <span className={styles.qpCardSub}>
                         {item.modules.length} compartment{item.modules.length !== 1 ? 's' : ''}
+                        {layout.accessories.length > 0 ? ` · ${layout.accessories.length} accessories` : ''}
                       </span>
                       <span className={styles.qpCardPrice}>
                         {priceRm == null ? '— (no price)' : `RM${priceRm.toLocaleString('en-MY')}`}
@@ -3675,7 +3767,7 @@ export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFl
                         <Trash2 size={14} strokeWidth={1.75} />
                       </button>
                     )}
-                    {isPicked && canMirror(item.modules) && (
+                    {isPicked && (canMirror(item.modules) || layout.accessories.length > 0) && (
                       <button
                         type="button"
                         className={styles.qpMirrorBtn}
@@ -3716,7 +3808,9 @@ export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFl
             // Quick Pick selected — show its layout cells in the hero.
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview
-                cells={cellsFromComboModules(qpMirror ? mirrorModules(pickedQPRow.modules) : pickedQPRow.modules, depth)}
+                cells={heroLayout!.cells}
+                accessories={heroLayout!.accessories}
+                accessoryOptions={accessoryOptions}
                 depth={depth}
                 anchorAspect={qpAnchorAspect}
                 showDims

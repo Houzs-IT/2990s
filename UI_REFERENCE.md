@@ -168,7 +168,93 @@ When porting this to React + Vite + RR7:
 
 ## Approved deviations from prototype
 
+### My orders · showroom or roadshow event · 30 October 2026
+
+Owner requested a way to separate My orders by showroom or roadshow event,
+because every place's sales were pooled into one figure. A place picker sits in
+the toolbar beside the salesperson picker, for all staff (it only narrows what
+they already see): All showrooms & roadshows, then Showrooms, Roadshow events
+("VENUE — ORGANIZER · 3 – 12 Oct") and No venue recorded when there is one. Both
+KPI cards and the board follow the pick, and the card headings name it. Picking
+an event moves the period to that event's own days. Search still looks across
+all dates and places. The picker stays hidden when the API does not list places.
+
+### Sofa accessories in Combo Price and Quick Pick · 30 October 2026
+
+Loo requested that sofa accessories placed on a custom sofa be saved with Add to
+Combo Price and Save as Quick Pick. Combo pricing includes the selected accessory
+Models and quantities; those pieces must not be charged a second time. Extra
+pieces remain individually priced. Both save dialogs identify the included
+pieces. Shared and personal Quick Picks restore their accessory placements and
+colours, show them in the preview, and use live prices. Separate accessory SKUs
+remain available for fulfilment.
+
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
+
+### Customize · Add to Combo Price · 30 October 2026
+
+Owner requested an Add to Combo Price action beside Save as Quick Pick for
+Sales Director-level price editors. Use the existing Maintain permission
+(including Houzs's resolved configuration-write permission). One complete sofa
+opens the selling-price dialog with its modules, Model and current size filled
+in; preserve sen precision and keep separately charged upgrades out of the base
+price. Save through the POS combo endpoint and refresh combo pricing. Ordinary
+sales staff retain their existing Quick Pick action. Price actions may wrap on
+tablets to accommodate the additional button.
+
+### Android sofa tablet text overflow · 30 October 2026
+
+Owner requested overlap fixes for the HONOR Pad X8b simulator while retaining
+the Apple presentation. Android sofa pages keep compact header spacing through
+1366 CSS pixels, reserve space for the depth/mode controls, and give actions a
+second row at 768–1100px. Custom-build price actions may wrap within their panel.
+Customize allows vertical touch scrolling from empty canvas space while sofa
+modules and accessories retain their drag gestures; its options panel scrolls independently.
+In Android tablet landscape, Customize places its existing total and actions above
+the canvas and keeps them below the sticky header while scrolling, so the price
+is visible immediately. Portrait keeps the existing placement.
+Follow-up from the owner: landscape now moves that same total/action group into
+the top toolbar and fits the full room, including the TV, into the remaining
+screen height. The page does not scroll vertically; only the options rail does.
+This replaces the landscape sticky-price placement above; portrait stays unchanged.
+The owner also requested visual cleanup: the landscape total has a compact
+bordered summary, secondary actions have matching outlines and 44px targets,
+and the canvas title/tools align on a divided row. Below 1280px, Customize's
+navigation and selling actions use separate rows rather than crowding one row.
+Apple, phone, and non-sofa layouts retain their existing rules. The local
+simulation can explicitly select the Android layout for review; this does not
+emulate Android itself or establish the physical tablet's browser scaling.
+
+Owner follow-up after physical tablet photos: mattress and bedframe names still
+overlap the checkout steps, and sofa chrome needs clearer spacing and typography.
+At Android tablet widths (768–1366 CSS px), all three configurators now use a
+navigation/account row followed by a separate product/price/action row. The logo
+has 16px top padding plus the device safe area and a 44px aligned navigation row.
+Product names wrap in their own flexible column; redundant product-name eyebrows
+on mattress/bedframe become category labels. Prices use the existing system title
+font, tabular numbers and consistent label spacing. Customize includes its product
+name, with price/actions grouped on the right. Measured header height continues
+to fit the sofa room and position notices on all three product pages. Apple and
+phone presentation remain unchanged. This supersedes the sofa-only header scope
+and the compact bordered landscape price summary in the preceding entry.
+
+### SKU Master model filter names · 30 October 2026
+
+Owner requested the POS SKU Master model filter rail to follow the Model name.
+The pills and More menu display saved Modular names and sort by name; search
+matches either name or code. Existing SKU model codes remain the filter keys,
+with the code shown as a fallback when no saved name is available.
+
+### Fabric series grouping · 30 October 2026
+
+Owner requested one series for MONZA variants and saved series names (such as
+BROWNIE colours assigned to HOMELY) to appear in Modular and Fabric tiers. Both
+screens use the saved converter series first, then normalized code families.
+Tier rows represent a whole series; an explicit click applies the chosen selling
+tier to its original library records. Existing different tiers display Mixed
+until edited. When several saved series share a price record, show one combined
+row with a Shared tier hint. Colour codes, allowed options and order/pricing IDs
+stay unchanged. Existing table/drawer styling and configurator layout remain.
 
 ### §1 · Per-Model sofa pricing (already merged into prototype/backend-catalog.jsx + prototype/pos-sofa-config.jsx)
 

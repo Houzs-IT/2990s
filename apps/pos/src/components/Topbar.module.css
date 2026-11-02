@@ -112,6 +112,9 @@
   min-width: 0;
 }
 
+/* Preserve the existing flex items outside the Android configurator. */
+.actionSlot, .accountActions { display: contents; }
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -269,6 +272,41 @@
   .staffMeta {
     max-width: 84px;
   }
+}
+
+/* Android product pages use a consistent navigation row and selling row.
+   Product names never compete with the stepper or sofa mode controls.
+   The measured height below feeds the sofa canvas; Apple keeps its layout. */
+@media (min-width: 768px) and (max-width: 1366px) {
+  .topbar[data-android-configurator] {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'brand navigation account' 'actions actions actions';
+    gap: 12px 20px;
+    padding: 16px 20px 12px;
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  }
+  .topbar[data-android-configurator] .left { grid-area: brand; min-height: 44px; }
+  .topbar[data-android-configurator] .crumb { display: none; }
+  .topbar[data-android-configurator] .center { grid-area: navigation; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+  .topbar[data-android-configurator] .center > * { flex-shrink: 0; }
+  .topbar[data-android-configurator] .step { white-space: nowrap; font-size: 12px; letter-spacing: .06em; padding: 8px; }
+  .topbar[data-android-configurator] .right { display: contents; }
+  .topbar[data-android-configurator] .actionSlot {
+    grid-area: actions;
+    display: flex;
+    min-width: 0;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .topbar[data-android-configurator] .accountActions { grid-area: account; display: flex; align-items: center; gap: 8px; }
+  .topbar[data-android-configurator] .staffChip,
+  .topbar[data-android-configurator] .iconBtn,
+  .topbar[data-android-configurator] .pill { flex-shrink: 0; }
+  .topbar[data-android-configurator] .iconBtn { width: 44px; height: 44px; }
+  .topbar[data-android-configurator] .staffMeta { max-width: 84px; line-height: 1.35; }
 }
 
 /* ─── Desktop density (≥1280 + hover + fine pointer) ─── */

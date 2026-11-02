@@ -120,11 +120,32 @@
 }
 
 .tableCard {
+  min-width: 0;
   background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
   overflow: hidden;
+}
+
+/* Edit Prices adds an input to every size column. Keep that extra width
+   inside a bounded viewport so both scrollbars stay within reach. */
+.skuTableScroll {
+  max-height: 65vh;
+  max-height: 65dvh;
+  overflow: auto;
+  scroll-padding-top: 48px;
+}
+
+.skuTableScroll:focus-visible {
+  outline-offset: -3px;
+}
+
+.skuTableScroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 var(--line);
 }
 
 .table {
@@ -683,4 +704,13 @@
 .visibleToggle input:disabled + span {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Modular › a category's section header, with ⋯ › Edit several models at its
+   end (2026-11-01; components/products/ModularBulkDrawer). */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Bookmark, KeyRound, LifeBuoy, ListOrdered, LogOut, ShoppingBag, Menu } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
@@ -9,6 +9,7 @@ import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
 import { IS_HOUZS } from '../lib/apiClient';
 import { IS_SIMULATION } from '../lib/simulation-mode';
+import { usesAndroidSofaLayout } from '../lib/android-sofa-layout';
 import styles from './Topbar.module.css';
 
 export type StepId = 'cart' | 'customer' | 'confirm';
@@ -20,6 +21,10 @@ const STEPS: { id: StepId; label: string }[] = [
 ];
 
 interface TopbarProps {
+  /** Product details/actions get their own row on Android tablets. */
+  productConfigurator?: boolean;
+  /** Android sofa controls need their own density rules; keep Apple unchanged. */
+  sofaConfigurator?: boolean;
   mobileActionsInPage?: boolean;
   mobileCenterInPage?: boolean;
   /** Give the center content its own full-width row below the phone navigation. */
@@ -46,7 +51,7 @@ interface TopbarProps {
   backLabel?: string;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile, sofaConfigurator, productConfigurator }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const canChangePin = useCanChangePin();
@@ -62,11 +67,39 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
   const name = staff?.name ?? user?.email?.split('@')[0] ?? 'Staff';
   const role = isMarketing ? 'marketing' : staff?.role ?? 'Staff';
   const avatarColor = staff?.color ?? '#A6471E';
+  const androidProduct = (sofaConfigurator || productConfigurator) && usesAndroidSofaLayout(navigator.userAgent, IS_SIMULATION, window.location.search, navigator.maxTouchPoints);
+  const androidSofa = sofaConfigurator && androidProduct;
+  const headerRef = useRef<HTMLElement>(null);
+
+  // Android actions may occupy another row. Keep fixed configurator notices
+  // below the actual sticky header, including the local simulation banner.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!androidProduct || !header) return;
+    const root = document.documentElement;
+    const banner = header.previousElementSibling?.classList.contains(styles.simulationBanner!) ? header.previousElementSibling : null;
+    const measure = () => {
+      const bounds = header.getBoundingClientRect();
+      root.style.setProperty('--android-sofa-topbar-bottom', `${bounds.bottom}px`);
+      root.style.setProperty('--android-sofa-chrome-height', `${Math.ceil(bounds.height + (banner?.getBoundingClientRect().height ?? 0))}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    if (banner) observer.observe(banner);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', measure);
+      root.style.removeProperty('--android-sofa-topbar-bottom');
+      root.style.removeProperty('--android-sofa-chrome-height');
+    };
+  }, [androidProduct]);
 
   return (
     <>
     {IS_SIMULATION && <div className={styles.simulationBanner}>Local simulation · No live orders or payments</div>}
-    <header className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
+    <header ref={headerRef} data-android-configurator={androidProduct ? '' : undefined} data-android-sofa={androidSofa ? '' : undefined} className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
       <div className={styles.left}>
         {backTo && (
           <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
@@ -93,6 +126,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
       </div>
 
       <div className={`${styles.right} ${mobileActionsInPage ? styles.mobileHidden : ''}`}>
+        <div className={styles.actionSlot}>
         {rightSlot ?? (
           <>
             <Link to="/quotes" className={styles.pill} aria-label="Saved quotes">
@@ -119,6 +153,8 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
             )}
           </>
         )}
+        </div>
+        <div className={styles.accountActions}>
         {user && (
           <span className={styles.staffChip}>
             <span className={styles.avatar} style={{ background: avatarColor }}>
@@ -149,6 +185,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
         >
           <LogOut size={18} strokeWidth={1.75} />
         </button>
+        </div>
       </div>
       <div className={styles.mobileNav}>
         <Link to="/cart" className={styles.mobileCart} aria-label={`Cart, ${count} items`}>
