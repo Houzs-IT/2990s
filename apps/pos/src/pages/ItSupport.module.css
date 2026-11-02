@@ -49,6 +49,7 @@
   border: 2px dashed var(--line); border-radius: var(--radius-sm); background: none; color: var(--fg-muted);
   font-family: var(--font-sans); font-size: var(--fs-13);
 }
+.drop > * { pointer-events: none; }
 .dropOver { border-color: var(--fg); color: var(--fg); }
 .chip {
   display: inline-flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;

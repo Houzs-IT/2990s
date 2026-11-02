@@ -45,7 +45,7 @@ function Files({ files, onChange }: { files: File[]; onChange: (f: File[]) => vo
         <button
           type="button" className={`${styles.drop} ${over ? styles.dropOver : ''}`}
           onClick={() => input.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); }}
           onDragLeave={() => setOver(false)}
           onDrop={(e) => { e.preventDefault(); setOver(false); add(e.dataTransfer.files); }}
         >
