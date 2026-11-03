@@ -10,6 +10,7 @@
 // repriced from the SKU Master with every option reset to TBC — the same
 // floor rule applies.
 
+import { swapDepthOf } from '../lib/sofa-swap-seed';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -502,7 +503,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     navigate(
       `/configure/${configureId}?${qs}`,
       sameModel && target.buildCells && target.buildCells.length > 0
-        ? { state: { swapCells: target.buildCells, swapDepth: typeof target.variants?.depth === 'string' ? target.variants.depth : undefined } }
+        ? { state: { swapCells: target.buildCells, swapDepth: swapDepthOf(target.variants) } }
         : undefined,
     );
   };

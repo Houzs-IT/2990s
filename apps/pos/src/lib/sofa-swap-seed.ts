@@ -24,3 +24,11 @@ export const seedSwapCells = (cellsIn: SwapCellIn[], depth: Depth, newId: () => 
    re-read at the wrong width and drew apart (2990-0032). */
 export const clampDepth = (active: Depth, options: Depth[], loading: boolean): Depth =>
   loading || options.includes(active) ? active : (options[0] ?? '24');
+
+/* The SO stores a build's seat depth as variants.seatHeight (Backend canonical
+   name); variants.depth is only there on some older lines. Reading `depth`
+   alone gave undefined for 2990-SO-2611-002, so a 30" build was read at 24". */
+export const swapDepthOf = (v: Record<string, unknown> | null | undefined): string | undefined => {
+  const d = v?.depth ?? v?.seatHeight;
+  return typeof d === 'string' && d ? d : undefined;
+};
