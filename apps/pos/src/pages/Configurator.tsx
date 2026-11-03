@@ -81,6 +81,7 @@ import {
   type RedeemablePwpCode,
 } from '../lib/queries';
 import { authedFetchRaw } from '../lib/apiClient';
+import { withSoLineLease } from '../lib/so-line-lease';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { usesAndroidSofaLayout } from '../lib/android-sofa-layout';
@@ -637,10 +638,11 @@ export const Configurator = () => {
       const line: CartLine = { key: `swap-${swapItemId}`, qty: 1, config: snapshot };
       const resolution = await fetchItemCodeMap([line]);
       const [soItem] = cartLinesToSoItems([line], undefined, resolution);
-      const res = await authedFetchRaw(`/mfg-sales-orders/${swapDoc}/items/${swapItemId}/tbc-swap-sofa`, {
+      const res = await withSoLineLease(swapDoc, (leaseToken) => authedFetchRaw(`/mfg-sales-orders/${swapDoc}/items/${swapItemId}/tbc-swap-sofa`, {
         method: 'POST',
+        headers: { 'X-SO-Edit-Lease': leaseToken },
         body: JSON.stringify({ item: soItem }),
-      });
+      }));
       if (!res.ok) {
         let payload: Record<string, unknown> = { error: `http_${res.status}` };
         try { payload = (await res.json()) as Record<string, unknown>; } catch { /* non-JSON */ }
@@ -650,6 +652,8 @@ export const Configurator = () => {
             ? 'This build would bring the bill below the original sales order total.'
             : err === 'pricing_drift'
               ? 'The server priced this build differently — hard-refresh the app and try again.'
+              : err === 'so_edit_lease_conflict'
+              ? String(payload.message ?? 'Someone else is saving this order. Wait a minute and try again.')
               : String(payload.reason ?? payload.message ?? err ?? 'Exchange failed.'),
         );
       }
