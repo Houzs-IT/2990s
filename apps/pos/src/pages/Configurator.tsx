@@ -40,7 +40,7 @@ import {
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
-import { planSwapSeed, clampDepth, type SwapCellIn } from '../lib/sofa-swap-seed';
+import { planSwapSeed, clampDepth, reflowOnDepthChange, type SwapCellIn } from '../lib/sofa-swap-seed';
 import { priceSofaQuickPickLayout, resolveSofaQuickPickLayout, type SofaQuickPickLayout } from '../lib/sofa-quick-pick-layout';
 import {
   useCart,
@@ -1525,6 +1525,14 @@ export const Configurator = () => {
     const next = clampDepth(activeDepth, depthOptions, product.isLoading || sofaCustomizer.isLoading);
     if (next !== activeDepth) setActiveDepth(next);
   }, [depthOptions, activeDepth, product.isLoading, sofaCustomizer.isLoading]);
+
+  // A depth switch re-lays the sofa flush when it would open gaps (2990-0032).
+  const prevDepthRef = useRef(activeDepth);
+  useEffect(() => {
+    const prev = prevDepthRef.current;
+    prevDepthRef.current = activeDepth;
+    if (prev !== activeDepth) setSofaCells((cells) => reflowOnDepthChange(cells, prev, activeDepth));
+  }, [activeDepth]);
 
   // Seed after the Model's offered depths are known: a saved depth it no longer
   // offers is re-laid at the depth the tab will land on (2990-0032).

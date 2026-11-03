@@ -3,7 +3,7 @@ import { groupSofas, moduleFootprint, findModule } from '@2990s/shared';
 
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: null }), isGlobalCurator: () => false }));
-import { seedSwapCells, clampDepth, swapDepthOf, planSwapSeed } from './sofa-swap-seed';
+import { seedSwapCells, clampDepth, swapDepthOf, planSwapSeed, reflowOnDepthChange } from './sofa-swap-seed';
 
 let n = 0;
 const id = () => `c${n++}`;
@@ -74,5 +74,29 @@ describe('planSwapSeed — Model does not offer the saved depth (2990-0032)', ()
   });
   it('keeps the saved depth when the Model offers it', () => {
     expect(planSwapSeed(saved, '30', ['24', '30'], id)!.depth).toBe('30');
+  });
+});
+
+describe('2990-SO-2611-002 opens at 30 and survives depth switches (2990-0032)', () => {
+  const saved = [
+    { moduleId: 'L(LHF)', x: 127.74, y: 192.5, rot: 0 },
+    { moduleId: '2A(RHF)', x: 237.74, y: 192.5, rot: 0 },
+  ];
+  it('opens at 30 even when the line carries no depth field', () => {
+    const plan = planSwapSeed(saved, '24', ['24', '28', '30'], id)!;
+    expect(plan.depth).toBe('30');
+    expect(groupSofas(plan.cells, '30')).toHaveLength(1);
+  });
+  it('stays joined 30 -> 24 -> 30 and keeps cell ids', () => {
+    const at30 = planSwapSeed(saved, '30', ['24', '28', '30'], id)!.cells;
+    const at24 = reflowOnDepthChange(at30, '30', '24');
+    expect(groupSofas(at24, '24')).toHaveLength(1);
+    expect(at24.map((c) => c.id).sort()).toEqual(at30.map((c) => c.id).sort());
+    const back = reflowOnDepthChange(at24, '24', '30');
+    expect(groupSofas(back, '30')).toHaveLength(1);
+  });
+  it('leaves a layout alone when the switch breaks nothing', () => {
+    const one = [{ id: 'a', moduleId: '2A(LHF)', x: 5, y: 5, rot: 0 }] as never;
+    expect(reflowOnDepthChange(one, '30', '24')).toBe(one);
   });
 });
