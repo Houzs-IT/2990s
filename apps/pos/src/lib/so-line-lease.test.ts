@@ -18,7 +18,7 @@ describe('withSoLineLease', () => {
     const out = await withSoLineLease('SO-1', async (t) => { seen = t; return 'done'; });
     expect(out).toBe('done');
     const [, reserve, release] = calls;
-    expect(JSON.parse(String(reserve.init?.body))).toMatchObject({ version: 7, reserveLineWrites: true, lineWriteLeaseToken: seen });
-    expect(JSON.parse(String(release.init?.body))).toMatchObject({ version: 8, completeLineWrites: true, lineWriteLeaseToken: seen });
+    expect(JSON.parse(String(reserve!.init?.body))).toMatchObject({ version: 7, reserveLineWrites: true, lineWriteLeaseToken: seen });
+    expect(JSON.parse(String(release!.init?.body))).toMatchObject({ version: 8, completeLineWrites: true, lineWriteLeaseToken: seen });
   });
 });
