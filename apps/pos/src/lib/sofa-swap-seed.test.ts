@@ -77,23 +77,20 @@ describe('planSwapSeed — Model does not offer the saved depth (2990-0032)', ()
   });
 });
 
-describe('2990-SO-2611-002 opens at 30 and survives depth switches (2990-0032)', () => {
+describe('2990-SO-2611-002 survives depth switches (2990-0032)', () => {
   const saved = [
     { moduleId: 'L(LHF)', x: 127.74, y: 192.5, rot: 0 },
     { moduleId: '2A(RHF)', x: 237.74, y: 192.5, rot: 0 },
   ];
-  it('opens at 30 even when the line carries no depth field', () => {
-    const plan = planSwapSeed(saved, '24', ['24', '28', '30'], id)!;
-    expect(plan.depth).toBe('30');
-    expect(groupSofas(plan.cells, '30')).toHaveLength(1);
-  });
-  it('stays joined 30 -> 24 -> 30 and keeps cell ids', () => {
-    const at30 = planSwapSeed(saved, '30', ['24', '28', '30'], id)!.cells;
-    const at24 = reflowOnDepthChange(at30, '30', '24');
+  it('stays joined 24 -> 30 -> 24 and keeps cell ids', () => {
+    // SO-002 was last saved at 24 (95 apart), so Change product opens at 24
+    const at24 = planSwapSeed(saved.map((c, i) => ({ ...c, x: 127.74 + i * 95 })), '24', ['24', '28', '30'], id)!.cells;
     expect(groupSofas(at24, '24')).toHaveLength(1);
-    expect(at24.map((c) => c.id).sort()).toEqual(at30.map((c) => c.id).sort());
-    const back = reflowOnDepthChange(at24, '24', '30');
-    expect(groupSofas(back, '30')).toHaveLength(1);
+    expect(groupSofas(at24, '30')).toHaveLength(2); // what the tab click used to leave behind
+    const at30 = reflowOnDepthChange(at24, '24', '30');
+    expect(groupSofas(at30, '30')).toHaveLength(1);
+    expect(at30.map((c) => c.id).sort()).toEqual(at24.map((c) => c.id).sort());
+    expect(groupSofas(reflowOnDepthChange(at30, '30', '24'), '24')).toHaveLength(1);
   });
   it('leaves a layout alone when the switch breaks nothing', () => {
     const one = [{ id: 'a', moduleId: '2A(LHF)', x: 5, y: 5, rot: 0 }] as never;

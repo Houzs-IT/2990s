@@ -39,12 +39,7 @@ export const swapDepthOf = (v: Record<string, unknown> | null | undefined): stri
    re-flush instead of keeping gaps sized for the old depth. */
 export const planSwapSeed = (cellsIn: SwapCellIn[], savedDepth: Depth, options: Depth[], newId: () => string): { depth: Depth; cells: Cell[] } | null => {
   if (cellsIn.length === 0) return null;
-  // The saved geometry is the best witness of its own depth: prefer an offered
-  // depth at which the cells already form ONE sofa, whatever the line's depth
-  // field says (it can be missing or written under another name).
-  const asCells = cellsIn.map((c, i) => ({ id: `p${i}`, moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot } as Cell));
-  const joined = [savedDepth, ...options].find((d) => options.includes(d) && groupSofas(asCells, d).length === 1);
-  const depth = joined ?? clampDepth(savedDepth, options, false);
+  const depth = clampDepth(savedDepth, options, false);
   return { depth, cells: seedSwapCells(cellsIn, depth, newId) };
 };
 
