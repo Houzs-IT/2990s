@@ -1,4 +1,4 @@
-import { groupSofas, type Cell, type Depth } from '@2990s/shared';
+import { groupSofas, orderSofaCellsLeftToRight, type Cell, type Depth } from '@2990s/shared';
 import { cellsFromComboModules } from './sofa-combo-cells';
 import { centerCellsInRoom } from '../pages/CustomBuilder';
 
@@ -41,4 +41,20 @@ export const planSwapSeed = (cellsIn: SwapCellIn[], savedDepth: Depth, options: 
   if (cellsIn.length === 0) return null;
   const depth = clampDepth(savedDepth, options, false);
   return { depth, cells: seedSwapCells(cellsIn, depth, newId) };
+};
+
+/* Switching the seat-depth tab changes every module's width, so a layout that
+   was flush opens gaps (2990-0032). When the switch breaks a join, re-lay the
+   pieces flush at the new depth, keeping each cell's id so accessories stay put.
+   Layouts the switch leaves intact are returned untouched. */
+export const reflowOnDepthChange = (cells: Cell[], prev: Depth, next: Depth): Cell[] => {
+  if (cells.length < 2 || groupSofas(cells, next).length <= groupSofas(cells, prev).length) return cells;
+  const ordered = orderSofaCellsLeftToRight(cells, prev);
+  const left = [...ordered];
+  const lay = seedSwapCells(ordered.map((c) => ({ moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot })), next, () => '');
+  return lay.map((c) => {
+    const i = left.findIndex((o) => o.moduleId === c.moduleId);
+    const [src] = i >= 0 ? left.splice(i, 1) : [];
+    return src ? { ...src, x: c.x, y: c.y, rot: c.rot } : c;
+  });
 };
