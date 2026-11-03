@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { fmtRM, fabricTierAddon, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import { authedFetch, authedFetchRaw } from '../lib/apiClient';
+import { withSoLineLease } from '../lib/so-line-lease';
 import {
   useFabricLibrary,
   useFabricColours,
@@ -210,6 +211,7 @@ const friendlyError = (payload: Record<string, unknown>): string => {
   if (err === 'product_unpriced') return 'That product has no selling price yet — ask an admin to price it first.';
   if (err === 'so_sofa_no_other_main') return 'A sofa cannot share a sales order with a bedframe or mattress.';
   if (err === 'so_has_children') return 'This order already has a delivery or invoice — lines are locked.';
+  if (err === 'so_edit_lease_conflict') return String(payload.message ?? 'Someone else is saving this order. Wait a minute and try again.');
   const reason = payload.reason ?? payload.message;
   return reason ? String(reason) : (err || 'Save failed.');
 };
@@ -398,10 +400,12 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Save (variants delta) ────────────────────────────────────────── */
   const [error, setError] = useState<string | null>(null);
   const authedPost = async (path: string, body: unknown) => {
-    const res = await authedFetchRaw(path, {
+    // Houzs refuses line writes without the edit lease (so_edit_lease_conflict).
+    const res = await withSoLineLease(docNo, (leaseToken) => authedFetchRaw(path, {
       method: 'POST',
+      headers: { 'X-SO-Edit-Lease': leaseToken },
       body: JSON.stringify(body),
-    });
+    }));
     if (!res.ok) {
       let payload: Record<string, unknown> = { error: `http_${res.status}` };
       try { payload = (await res.json()) as Record<string, unknown>; } catch { /* keep http_NNN */ }
