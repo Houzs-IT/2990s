@@ -743,9 +743,10 @@ const LANES: ReadonlyArray<LaneDef> = [
  *  never disagree in Houzs's favour. Drop the fallback once nothing serves it. */
 /** Houzs (2026-08-18): setting a Processing Date moves CONFIRMED → IN_PRODUCTION,
  *  clearing it moves IN_PRODUCTION back. So "Move back" is offered on IN_PRODUCTION
- *  until the date passes; the server still 409s if a DO/SI exists. */
-export const canMoveBackToEdit = (status: string, processingPassed: boolean): boolean =>
-  status === 'IN_PRODUCTION' && !processingPassed;
+ *  until the date passes; the server still 409s if a DO/SI exists. Clearing the
+ *  date is Super Admin only on the server, so anyone else would just be refused. */
+export const canMoveBackToEdit = (status: string, processingPassed: boolean, isSuperAdmin: boolean): boolean =>
+  isSuperAdmin && status === 'IN_PRODUCTION' && !processingPassed;
 
 export const soIsProceeded = (o: Pick<MyOrderRow, 'processingDate' | 'proceededAt'>): boolean =>
   Boolean(o.processingDate ?? o.proceededAt);
@@ -1613,7 +1614,8 @@ const OrderDetail = ({ order, onClose }: {
      SHIPPED) keep the lock. */
   const processingPassed =
     !!order.processingDate && order.processingDate.slice(0, 10) < todayMY;
-  const canUnproceed = canMoveBackToEdit(order.status, processingPassed);
+  const isSuperAdmin = useStaff().data?.role === 'super_admin'; // same check as the Backend SalesOrderDetail
+  const canUnproceed = canMoveBackToEdit(order.status, processingPassed, isSuperAdmin);
 
   // Cascading dropdowns (state → city → postcode) sourced from my_localities.
   const localities = useLocalities();

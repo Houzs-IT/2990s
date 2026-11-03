@@ -65,13 +65,16 @@ describe('soIsProceeded — the Processing Date is the one storage', () => {
 });
 
 describe('canMoveBackToEdit — Houzs moves IN_PRODUCTION back when the date is cleared', () => {
-  it('IN_PRODUCTION before the Processing Date passes → allowed', () => {
-    expect(canMoveBackToEdit('IN_PRODUCTION', false)).toBe(true);
+  it('Super Admin, IN_PRODUCTION before the Processing Date passes → allowed', () => {
+    expect(canMoveBackToEdit('IN_PRODUCTION', false, true)).toBe(true);
+  });
+  it('anyone else → not allowed (Houzs refuses clearing the date)', () => {
+    expect(canMoveBackToEdit('IN_PRODUCTION', false, false)).toBe(false);
   });
   it('IN_PRODUCTION after the date passed → not allowed', () => {
-    expect(canMoveBackToEdit('IN_PRODUCTION', true)).toBe(false);
+    expect(canMoveBackToEdit('IN_PRODUCTION', true, true)).toBe(false);
   });
   it.each(['CONFIRMED', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'])('%s → not allowed', (s) => {
-    expect(canMoveBackToEdit(s, false)).toBe(false);
+    expect(canMoveBackToEdit(s, false, true)).toBe(false);
   });
 });
