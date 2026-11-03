@@ -1382,6 +1382,7 @@
 }
 .detailFootError {
   margin: 0;
+  white-space: pre-line;
   font-size: var(--fs-12);
   color: var(--c-error);
   font-family: var(--font-button);

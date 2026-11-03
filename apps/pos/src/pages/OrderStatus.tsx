@@ -67,6 +67,7 @@ import { useStaff, useSalesStaff } from '../lib/staff';
 import { useCanViewAllSales } from '../lib/houzs-perms';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { launchHouzsSso, canLaunchHouzs } from '../lib/houzs-sso';
+import { saveProblemMessages } from '../lib/so-problems';
 import styles from './OrderStatus.module.css';
 
 const PIN_LEN = 6;
@@ -443,6 +444,9 @@ const describeSoActionError = (e: unknown): string => {
     return 'This order already has a delivery order / invoice — customer and address are locked. Payment can still be updated.';
   }
   const reason = p.reason ?? p.message;
+  const problems = saveProblemMessages(e.payload);
+  // One line per problem under the sentence; the foot strip uses pre-line.
+  if (reason && problems.length > 1) return [String(reason), ...problems.map((m) => `• ${m}`)].join('\n');
   if (reason) return String(reason);
   return err ? `${err.replaceAll('_', ' ')}.` : `Request failed (${e.status}).`;
 };
