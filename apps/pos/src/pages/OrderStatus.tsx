@@ -741,6 +741,12 @@ const LANES: ReadonlyArray<LaneDef> = [
  *  2990-side API (local dev, and any surface Houzs has not migrated) may still
  *  serve it, but where both are present the Processing Date wins, so the two can
  *  never disagree in Houzs's favour. Drop the fallback once nothing serves it. */
+/** Houzs (2026-08-18): setting a Processing Date moves CONFIRMED → IN_PRODUCTION,
+ *  clearing it moves IN_PRODUCTION back. So "Move back" is offered on IN_PRODUCTION
+ *  until the date passes; the server still 409s if a DO/SI exists. */
+export const canMoveBackToEdit = (status: string, processingPassed: boolean): boolean =>
+  status === 'IN_PRODUCTION' && !processingPassed;
+
 export const soIsProceeded = (o: Pick<MyOrderRow, 'processingDate' | 'proceededAt'>): boolean =>
   Boolean(o.processingDate ?? o.proceededAt);
 
@@ -1607,8 +1613,7 @@ const OrderDetail = ({ order, onClose }: {
      SHIPPED) keep the lock. */
   const processingPassed =
     !!order.processingDate && order.processingDate.slice(0, 10) < todayMY;
-  const canUnproceed =
-    order.status === 'CONFIRMED' && !!order.proceededAt && !processingPassed;
+  const canUnproceed = canMoveBackToEdit(order.status, processingPassed);
 
   // Cascading dropdowns (state → city → postcode) sourced from my_localities.
   const localities = useLocalities();
@@ -1856,7 +1861,13 @@ const OrderDetail = ({ order, onClose }: {
     mutationFn: async () => {
       await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...buildPatch(), proceededAt: new Date().toISOString(), version: await currentVersion() }),
+        // Houzs proceeds an order only when a Processing Date is in the patch
+        // (proceededAt is ignored), so send it even when unchanged.
+        body: JSON.stringify({
+          ...buildPatch(),
+          ...soProcessingDatePayload(edited.processingDate || null),
+          version: await currentVersion(),
+        }),
       });
     },
     onSuccess: () => {
@@ -1878,7 +1889,8 @@ const OrderDetail = ({ order, onClose }: {
     mutationFn: async () => {
       await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ proceededAt: null, version: await currentVersion() }),
+        // Clearing the Processing Date is what moves IN_PRODUCTION back to CONFIRMED.
+        body: JSON.stringify({ ...soProcessingDatePayload(null), version: await currentVersion() }),
       });
     },
     onSuccess: () => {
@@ -1956,7 +1968,7 @@ const OrderDetail = ({ order, onClose }: {
       <aside ref={detailRef} className={styles.detail} role="dialog" aria-modal="true" aria-label={`Order ${order.id}`} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <header className={styles.detailHead}>
           <div>
-            <div className={styles.detailEyebrow}>Order · {order.status === 'CONFIRMED' && order.proceededAt ? 'Proceed' : LANE_LABEL[order.status]}</div>
+            <div className={styles.detailEyebrow}>Order · {order.status === 'CONFIRMED' && soIsProceeded(order) ? 'Proceed' : LANE_LABEL[order.status]}</div>
             <h2 className={styles.detailTitle}>{order.id}</h2>
             <div className={styles.detailSub}>
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}

@@ -56,6 +56,12 @@ describe('getSoEditScope', () => {
     expect(s.canEditDetails).toBe(true);
   });
 
+  it('CONFIRMED + Processing Date (no proceededAt) → locked like Proceed, not placed', () => {
+    const s = getSoEditScope({ status: 'CONFIRMED', proceededAt: null, processingDate: '2026-12-12', todayMY: '2026-11-03' });
+    expect(s.editablePlaced).toBe(false);
+    expect(s.editableProceed).toBe(true);
+  });
+
   it.each(['IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED'])(
     '%s → Proceed lane, details editable',
     (status) => {
