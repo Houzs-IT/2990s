@@ -17,3 +17,10 @@ export const seedSwapCells = (cellsIn: SwapCellIn[], depth: Depth, newId: () => 
   }
   return centerCellsInRoom(cells, depth);
 };
+
+/* Keep the seat-depth tab within the Model's offered depths. While the Model is
+   still loading, depthOptions is only the ['24'] placeholder: clamping then
+   knocked a 28" Change-product seed back to 24", so the saved cells were
+   re-read at the wrong width and drew apart (2990-0032). */
+export const clampDepth = (active: Depth, options: Depth[], loading: boolean): Depth =>
+  loading || options.includes(active) ? active : (options[0] ?? '24');

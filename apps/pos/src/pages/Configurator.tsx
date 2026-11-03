@@ -40,7 +40,7 @@ import {
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
-import { seedSwapCells, type SwapCellIn } from '../lib/sofa-swap-seed';
+import { seedSwapCells, clampDepth, type SwapCellIn } from '../lib/sofa-swap-seed';
 import { priceSofaQuickPickLayout, resolveSofaQuickPickLayout, type SofaQuickPickLayout } from '../lib/sofa-quick-pick-layout';
 import {
   useCart,
@@ -1537,8 +1537,9 @@ export const Configurator = () => {
   // Keep activeDepth within the Model's offered depths (default to the smallest
   // — depthOptions is sorted ascending, so [0] is the smallest).
   useEffect(() => {
-    if (!depthOptions.includes(activeDepth)) setActiveDepth(depthOptions[0] ?? '24');
-  }, [depthOptions, activeDepth]);
+    const next = clampDepth(activeDepth, depthOptions, product.isLoading || sofaCustomizer.isLoading);
+    if (next !== activeDepth) setActiveDepth(next);
+  }, [depthOptions, activeDepth, product.isLoading, sofaCustomizer.isLoading]);
 
   // Build size rows once per data refresh (used by isSize render + topbar
   // action slot). Only sizes the Master Admin turned ON in Modular surface —
