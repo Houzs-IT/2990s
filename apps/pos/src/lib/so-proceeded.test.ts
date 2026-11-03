@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 // VITE_SUPABASE_URL/KEY at module load.
 vi.mock('../lib/supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { soIsProceeded } from '../pages/OrderStatus';
+import { canMoveBackToEdit, soIsProceeded } from '../pages/OrderStatus';
 
 /* WHAT BROKE, and why no existing test caught it.
  *
@@ -61,5 +61,17 @@ describe('soIsProceeded — the Processing Date is the one storage', () => {
        would satisfy it and then read as truthy nowhere else. Boolean() is what
        makes '' behave like absent here. */
     expect(soIsProceeded(row({ processingDate: '' }))).toBe(false);
+  });
+});
+
+describe('canMoveBackToEdit — Houzs moves IN_PRODUCTION back when the date is cleared', () => {
+  it('IN_PRODUCTION before the Processing Date passes → allowed', () => {
+    expect(canMoveBackToEdit('IN_PRODUCTION', false)).toBe(true);
+  });
+  it('IN_PRODUCTION after the date passed → not allowed', () => {
+    expect(canMoveBackToEdit('IN_PRODUCTION', true)).toBe(false);
+  });
+  it.each(['CONFIRMED', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'])('%s → not allowed', (s) => {
+    expect(canMoveBackToEdit(s, false)).toBe(false);
   });
 });

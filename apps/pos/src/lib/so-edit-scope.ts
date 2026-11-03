@@ -47,7 +47,9 @@ export function getSoEditScope(input: {
   // lane AND the processing_date not-yet-passed check — mirrors Houzs
   // soProcessingLocked (mfg-sales-orders.ts:264-290, owner 2026-07-16) which
   // locks regardless of proceededAt.
-  const editablePlaced = input.status === 'CONFIRMED' && !input.proceededAt && !processingPassed;
+  // A Processing Date means proceeded (Houzs one-storage rule), so CONFIRMED+date is locked too.
+  const editablePlaced =
+    input.status === 'CONFIRMED' && !input.proceededAt && procYmd == null && !processingPassed;
   const editableProceed = !isDeliveredLane && !editablePlaced;
   const canEditDetails = editablePlaced || editableProceed;
   const canEditControlledAddress = canEditDetails && !processingPassed;
