@@ -3,7 +3,7 @@ import { groupSofas, moduleFootprint, findModule } from '@2990s/shared';
 
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: null }), isGlobalCurator: () => false }));
-import { seedSwapCells, clampDepth, swapDepthOf } from './sofa-swap-seed';
+import { seedSwapCells, clampDepth, swapDepthOf, planSwapSeed } from './sofa-swap-seed';
 
 let n = 0;
 const id = () => `c${n++}`;
@@ -57,5 +57,22 @@ describe('2990-SO-2611-002 (LOTTI L(LHF) + 2A(RHF), seat 30)', () => {
     const out = seedSwapCells(saved, swapDepthOf(v)!, id);
     expect(groupSofas(out, '30')).toHaveLength(1);
     expect(out[1]!.x - out[0]!.x).toBe(110);
+  });
+});
+
+describe('planSwapSeed — Model does not offer the saved depth (2990-0032)', () => {
+  const saved = [
+    { moduleId: 'L(LHF)', x: 127.74, y: 192.5, rot: 0 },
+    { moduleId: '2A(RHF)', x: 237.74, y: 192.5, rot: 0 },
+  ];
+  it('lands on an offered depth and draws the pieces flush there', () => {
+    const plan = planSwapSeed(saved, '30', ['24', '28'], id)!;
+    expect(plan.depth).toBe('24');
+    expect(groupSofas(plan.cells, '24')).toHaveLength(1);
+    const [a, b] = [...plan.cells].sort((p, q) => p.x - q.x);
+    expect(b!.x - a!.x).toBe(moduleFootprint(findModule('L(LHF)')!, 0, '24').w);
+  });
+  it('keeps the saved depth when the Model offers it', () => {
+    expect(planSwapSeed(saved, '30', ['24', '30'], id)!.depth).toBe('30');
   });
 });
