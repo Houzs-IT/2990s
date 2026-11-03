@@ -32,3 +32,13 @@ export const swapDepthOf = (v: Record<string, unknown> | null | undefined): stri
   const d = v?.depth ?? v?.seatHeight;
   return typeof d === 'string' && d ? d : undefined;
 };
+
+/* Depth and cells for the Change-product seed. A build saved at a depth the
+   Model doesn't offer (2990-SO-2611-002: seat 30, Model offers 24/28) lands on
+   the nearest offered tab; the cells are then read at THAT depth, so the pieces
+   re-flush instead of keeping gaps sized for the old depth. */
+export const planSwapSeed = (cellsIn: SwapCellIn[], savedDepth: Depth, options: Depth[], newId: () => string): { depth: Depth; cells: Cell[] } | null => {
+  if (cellsIn.length === 0) return null;
+  const depth = clampDepth(savedDepth, options, false);
+  return { depth, cells: seedSwapCells(cellsIn, depth, newId) };
+};

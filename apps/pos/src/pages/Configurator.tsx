@@ -40,7 +40,7 @@ import {
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import { cellsFromComboModules } from '../lib/sofa-combo-cells';
-import { seedSwapCells, clampDepth, type SwapCellIn } from '../lib/sofa-swap-seed';
+import { planSwapSeed, clampDepth, type SwapCellIn } from '../lib/sofa-swap-seed';
 import { priceSofaQuickPickLayout, resolveSofaQuickPickLayout, type SofaQuickPickLayout } from '../lib/sofa-quick-pick-layout';
 import {
   useCart,
@@ -518,21 +518,6 @@ export const Configurator = () => {
   // "Same Model" seeds the canvas with the SO build's current cells (passed
   // via nav state — lost on a hard refresh, which simply starts blank).
   const swapSeededRef = useRef(false);
-  useEffect(() => {
-    if (!isSwapMode || swapSeededRef.current) return;
-    const st = location.state as { swapCells?: SwapCellIn[]; swapDepth?: string } | null;
-    const cellsIn = st?.swapCells;
-    if (cellsIn && cellsIn.length > 0) {
-      const depth = st?.swapDepth ?? activeDepth;
-      setActiveDepth(depth);
-      setSofaCells(seedSwapCells(cellsIn, depth, () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `c-${Math.random().toString(36).slice(2, 10)}`));
-      setMode('custom');
-    }
-    swapSeededRef.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSwapMode]);
   /* ── Add-product-to-placed-SO mode (Task 6, free-item-campaign) ────────
      Entered from My orders "Add product" — ?addToOrder=SO-XXXX carries the
      target SO. The primary button becomes "Add to this order"; the build is
@@ -1540,6 +1525,24 @@ export const Configurator = () => {
     const next = clampDepth(activeDepth, depthOptions, product.isLoading || sofaCustomizer.isLoading);
     if (next !== activeDepth) setActiveDepth(next);
   }, [depthOptions, activeDepth, product.isLoading, sofaCustomizer.isLoading]);
+
+  // Seed after the Model's offered depths are known: a saved depth it no longer
+  // offers is re-laid at the depth the tab will land on (2990-0032).
+  const modelLoading = product.isLoading || sofaCustomizer.isLoading;
+  useEffect(() => {
+    if (!isSwapMode || swapSeededRef.current || modelLoading) return;
+    const st = location.state as { swapCells?: SwapCellIn[]; swapDepth?: string } | null;
+    const plan = planSwapSeed(st?.swapCells ?? [], st?.swapDepth ?? activeDepth, depthOptions, () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `c-${Math.random().toString(36).slice(2, 10)}`);
+    if (plan) {
+      setActiveDepth(plan.depth);
+      setSofaCells(plan.cells);
+      setMode('custom');
+    }
+    swapSeededRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSwapMode, modelLoading]);
 
   // Build size rows once per data refresh (used by isSize render + topbar
   // action slot). Only sizes the Master Admin turned ON in Modular surface —
