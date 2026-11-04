@@ -58,6 +58,62 @@
 }
 .toolbarPrint:hover { background: var(--c-burnt); }
 
+.toolbarActions {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.menuBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 11;
+  min-width: 200px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(34, 31, 32, 0.16);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--c-ink);
+  font-family: var(--font-button);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.menuItem:hover:not(:disabled),
+.menuItem:focus-visible { background: var(--bg-alt); }
+.menuItem:disabled { color: var(--fg-muted); cursor: progress; }
+
+.toolbarError {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--c-burnt);
+}
+
 .page {
   background: #fff;
   color: #221F20;

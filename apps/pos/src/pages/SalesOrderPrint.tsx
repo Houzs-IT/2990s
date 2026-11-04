@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
-import { ArrowLeft, Printer } from 'lucide-react';
+import { ArrowLeft, Printer, Share } from 'lucide-react';
 import { useSalesOrderDoc, type PrintableLine, type PrintableSO } from '../lib/so-doc';
+import { buildSalesOrderPdf, canShareFiles } from '../lib/so-pdf';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
 import { usePaymentMethodLabels } from '../lib/so-maintenance/so-dropdown-options-queries';
 import { IS_SIMULATION } from '../lib/simulation-mode';
@@ -52,9 +53,7 @@ export const SalesOrderPrint = () => {
         <Link to="/my-orders" className={styles.toolbarBack}>
           <ArrowLeft size={18} strokeWidth={1.75} /> Back
         </Link>
-        <button type="button" className={styles.toolbarPrint} onClick={() => window.print()}>
-          <Printer size={16} strokeWidth={1.75} /> Print / Save as PDF
-        </button>
+        <PrintOrShareButton order={data} />
       </div>
       <article className={`${styles.page} sales-order-page`}>
         {IS_SIMULATION && (
@@ -78,6 +77,101 @@ export const SalesOrderPrint = () => {
         </div>
       </article>
     </main>
+  );
+};
+
+const PrintOrShareButton = ({ order }: { order: PrintableSO }) => {
+  const paymentLabels = usePaymentMethodLabels() as Record<string, string>;
+  const [isSharingSupported] = useState(canShareFiles);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const paymentMethodLabel = order.paymentMethod
+    ? paymentLabels[order.paymentMethod] ?? order.paymentMethod
+    : null;
+
+  useEffect(() => {
+    if (!isSharingSupported) return;
+    let isCancelled = false;
+    setPdfFile(null);
+    const build = async (): Promise<void> => {
+      try {
+        const file = await buildSalesOrderPdf(order, { paymentMethodLabel, isSimulation: IS_SIMULATION });
+        if (!isCancelled) setPdfFile(file);
+      } catch (error) {
+        console.error('Sales Order PDF build failed', error);
+        if (!isCancelled) setErrorMessage('Could not make the PDF. Use Print instead.');
+      }
+    };
+    void build();
+    return () => {
+      isCancelled = true;
+    };
+  }, [isSharingSupported, order, paymentMethodLabel]);
+
+  const print = (): void => {
+    setIsMenuOpen(false);
+    window.print();
+  };
+
+  const share = async (): Promise<void> => {
+    if (!pdfFile) return;
+    setIsMenuOpen(false);
+    setErrorMessage(null);
+    try {
+      await navigator.share({ files: [pdfFile], title: `Sales Order ${order.id}` });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      console.error('Sales Order share failed', error);
+      setErrorMessage('Could not open sharing. Use Print instead.');
+    }
+  };
+
+  if (!isSharingSupported) {
+    return (
+      <button type="button" className={styles.toolbarPrint} onClick={print}>
+        <Printer size={16} strokeWidth={1.75} /> Print / Save as PDF
+      </button>
+    );
+  }
+
+  return (
+    <div className={styles.toolbarActions}>
+      <button
+        type="button"
+        className={styles.toolbarPrint}
+        aria-haspopup="menu"
+        aria-expanded={isMenuOpen}
+        onClick={() => setIsMenuOpen((isOpen) => !isOpen)}
+      >
+        <Printer size={16} strokeWidth={1.75} /> Print / Share
+      </button>
+      {isMenuOpen && (
+        <>
+          <button
+            type="button"
+            className={styles.menuBackdrop}
+            aria-label="Close menu"
+            onClick={() => setIsMenuOpen(false)}
+          />
+          <div className={styles.menu} role="menu" onKeyDown={(event) => event.key === 'Escape' && setIsMenuOpen(false)}>
+            <button type="button" role="menuitem" className={styles.menuItem} onClick={print} autoFocus>
+              <Printer size={20} strokeWidth={1.75} /> Print
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => void share()}
+              disabled={!pdfFile}
+            >
+              <Share size={20} strokeWidth={1.75} /> {pdfFile ? 'Share PDF' : 'Preparing PDF…'}
+            </button>
+          </div>
+        </>
+      )}
+      {errorMessage && <p className={styles.toolbarError} role="alert">{errorMessage}</p>}
+    </div>
   );
 };
 
