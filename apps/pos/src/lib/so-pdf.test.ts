@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildSalesOrderPdf } from './so-pdf';
+import chineseFontDataUrl from '../assets/fonts/NotoSansSC-Regular-gb2312.ttf?inline';
 import type { PrintableSO } from './so-doc';
 
 const order: PrintableSO = {
@@ -53,5 +54,18 @@ describe('buildSalesOrderPdf', () => {
   it('marks a simulation build so it is never mistaken for a real order', async () => {
     const file = await buildSalesOrderPdf(order, { paymentMethodLabel: null, isSimulation: true });
     expect(await pdfText(file)).toContain('SIMULATION');
+  });
+
+  it('embeds the Chinese font only when the order carries Chinese text', async () => {
+    const fontBase64 = chineseFontDataUrl.slice(chineseFontDataUrl.indexOf(',') + 1);
+    const loadChineseFont = vi.fn(async () => Uint8Array.from(atob(fontBase64), (character) => character.charCodeAt(0)).buffer);
+
+    await buildSalesOrderPdf(order, { paymentMethodLabel: null, isSimulation: false, loadChineseFont });
+    expect(loadChineseFont).not.toHaveBeenCalled();
+
+    const chineseOrder = { ...order, customerName: '黄鹏川', lines: order.lines.slice(0, 1).map((line) => ({ ...line, remark: '晚上送货' })) };
+    const file = await buildSalesOrderPdf(chineseOrder, { paymentMethodLabel: null, isSimulation: false, loadChineseFont });
+    expect(loadChineseFont).toHaveBeenCalledTimes(1);
+    expect(await pdfText(file)).toContain('/FontName /NotoSansSC');
   });
 });

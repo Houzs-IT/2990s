@@ -1,11 +1,12 @@
-import type { jsPDF as JsPdf } from 'jspdf';
+import type { jsPDF as JsPdf, TextOptionsLight as TextOptions } from 'jspdf';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from './legal';
 import type { PrintableSO } from './so-doc';
-
+import chineseFontUrl from '../assets/fonts/NotoSansSC-Regular-gb2312.ttf?url';
 
 export interface SalesOrderPdfOptions {
   paymentMethodLabel: string | null;
   isSimulation: boolean;
+  loadChineseFont?: () => Promise<ArrayBuffer>;
 }
 
 const PAGE_WIDTH = 210;
@@ -15,6 +16,24 @@ const CONTENT_BOTTOM = PAGE_HEIGHT - 16;
 const INK: [number, number, number] = [34, 31, 32];
 const BURNT: [number, number, number] = [166, 71, 30];
 const MUTED: [number, number, number] = [110, 110, 110];
+const CHINESE_FONT_FAMILY = 'NotoSansSC';
+const CHINESE_FONT_FILE = 'NotoSansSC-Regular.ttf';
+const CHINESE_TEXT = /[⺀-鿿豈-﫿︰-﹏＀-￯]/;
+
+const fetchChineseFont = async (): Promise<ArrayBuffer> => {
+  const response = await fetch(chineseFontUrl);
+  if (!response.ok) throw new Error(`Chinese font download failed: HTTP ${response.status}`);
+  return response.arrayBuffer();
+};
+
+const toBase64 = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+};
 
 const formatAmount = (amount: number): string =>
   amount.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -37,15 +56,33 @@ const signatureFormat = (dataUrl: string): 'PNG' | 'JPEG' =>
 
 export async function buildSalesOrderPdf(
   order: PrintableSO,
-  { paymentMethodLabel, isSimulation }: SalesOrderPdfOptions,
+  { paymentMethodLabel, isSimulation, loadChineseFont = fetchChineseFont }: SalesOrderPdfOptions,
 ): Promise<File> {
-  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+  const hasChineseText = CHINESE_TEXT.test(JSON.stringify(order)) || CHINESE_TEXT.test(paymentMethodLabel ?? '');
+  const [{ jsPDF }, { default: autoTable }, chineseFont] = await Promise.all([
     import('jspdf'),
     import('jspdf-autotable'),
+    hasChineseText ? loadChineseFont() : Promise.resolve(null),
   ]);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  if (chineseFont) {
+    doc.addFileToVFS(CHINESE_FONT_FILE, toBase64(chineseFont));
+    doc.addFont(CHINESE_FONT_FILE, CHINESE_FONT_FAMILY, 'normal');
+    doc.addFont(CHINESE_FONT_FILE, CHINESE_FONT_FAMILY, 'bold');
+  }
   const halfWidth = (PAGE_WIDTH - MARGIN * 2 - 6) / 2;
   const rightColumnX = MARGIN + halfWidth + 6;
+
+  const pickFontFor = (text: string | string[]): void => {
+    if (!chineseFont) return;
+    const isChinese = CHINESE_TEXT.test(Array.isArray(text) ? text.join('') : text);
+    doc.setFont(isChinese ? CHINESE_FONT_FAMILY : 'helvetica', doc.getFont().fontStyle);
+  };
+
+  const writeText = (text: string | string[], x: number, y: number, options?: TextOptions): void => {
+    pickFontFor(text);
+    doc.text(text, x, y, options);
+  };
 
   const ensureRoom = (y: number, neededHeight: number): number => {
     if (y + neededHeight <= CONTENT_BOTTOM) return y;
@@ -56,8 +93,9 @@ export async function buildSalesOrderPdf(
   const drawLines = (lines: string[], x: number, y: number, width: number, lineHeight: number): number => {
     let cursorY = y;
     for (const line of lines) {
+      pickFontFor(line);
       const wrapped = doc.splitTextToSize(line, width) as string[];
-      doc.text(wrapped, x, cursorY);
+      writeText(wrapped, x, cursorY);
       cursorY += wrapped.length * lineHeight;
     }
     return cursorY;
@@ -67,7 +105,7 @@ export async function buildSalesOrderPdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(...BURNT);
-    doc.text(text.toUpperCase(), x, y);
+    writeText(text.toUpperCase(), x, y);
     doc.setTextColor(...INK);
   };
 
@@ -78,7 +116,7 @@ export async function buildSalesOrderPdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(...BURNT);
-    doc.text('SIMULATION — NOT A SALES ORDER', PAGE_WIDTH / 2, y, { align: 'center' });
+    writeText('SIMULATION — NOT A SALES ORDER', PAGE_WIDTH / 2, y, { align: 'center' });
     doc.setTextColor(...INK);
     y += 7;
   }
@@ -86,11 +124,11 @@ export async function buildSalesOrderPdf(
   const headerTop = y + 2;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.text(COMPANY_LEGAL.name, MARGIN, headerTop);
+  writeText(COMPANY_LEGAL.name, MARGIN, headerTop);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(...MUTED);
-  doc.text(`SSM ${COMPANY_LEGAL.ssm}`, MARGIN, headerTop + 4.5);
+  writeText(`SSM ${COMPANY_LEGAL.ssm}`, MARGIN, headerTop + 4.5);
   doc.setTextColor(...INK);
   let leftY = drawLines([...COMPANY_LEGAL.hqLines], MARGIN, headerTop + 9.5, halfWidth + 20, 3.6);
   if (COMPANY_LEGAL.whatsapp) {
@@ -99,14 +137,14 @@ export async function buildSalesOrderPdf(
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text('SALES ORDER', PAGE_WIDTH - MARGIN, headerTop, { align: 'right' });
+  writeText('SALES ORDER', PAGE_WIDTH - MARGIN, headerTop, { align: 'right' });
   doc.setFontSize(10);
   doc.setTextColor(...BURNT);
-  doc.text(order.id, PAGE_WIDTH - MARGIN, headerTop + 6, { align: 'right' });
+  writeText(order.id, PAGE_WIDTH - MARGIN, headerTop + 6, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(...MUTED);
-  doc.text(`Date: ${formatIsoDate(order.date)}`, PAGE_WIDTH - MARGIN, headerTop + 10.5, { align: 'right' });
+  writeText(`Date: ${formatIsoDate(order.date)}`, PAGE_WIDTH - MARGIN, headerTop + 10.5, { align: 'right' });
   doc.setTextColor(...INK);
   y = Math.max(leftY, headerTop + 12) + 5;
 
@@ -114,12 +152,12 @@ export async function buildSalesOrderPdf(
   drawLabel('Delivery estimate date', rightColumnX, y);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text(order.id, MARGIN, y + 5);
-  doc.text(order.deliveryDate ? formatIsoDate(order.deliveryDate) : 'To be confirmed', rightColumnX, y + 5);
+  writeText(order.id, MARGIN, y + 5);
+  writeText(order.deliveryDate ? formatIsoDate(order.deliveryDate) : 'To be confirmed', rightColumnX, y + 5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(...MUTED);
-  doc.text(`Placed ${formatIsoDate(order.date)}`, MARGIN, y + 9);
+  writeText(`Placed ${formatIsoDate(order.date)}`, MARGIN, y + 9);
   doc.setTextColor(...INK);
   let paymentsY = y + 10;
   if (order.payments.length > 0) {
@@ -128,14 +166,14 @@ export async function buildSalesOrderPdf(
     doc.setFontSize(8);
     for (const payment of order.payments) {
       doc.setFont('helvetica', 'normal');
-      doc.text(payment.methodLabel, rightColumnX, paymentsY);
+      writeText(payment.methodLabel, rightColumnX, paymentsY);
       doc.setFont('helvetica', 'bold');
-      doc.text(formatMoney(payment.amount), PAGE_WIDTH - MARGIN, paymentsY, { align: 'right' });
+      writeText(formatMoney(payment.amount), PAGE_WIDTH - MARGIN, paymentsY, { align: 'right' });
       paymentsY += 3.6;
       if (payment.approvalCode) {
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(...MUTED);
-        doc.text(`Ref ${payment.approvalCode}`, rightColumnX, paymentsY);
+        writeText(`Ref ${payment.approvalCode}`, rightColumnX, paymentsY);
         doc.setTextColor(...INK);
         paymentsY += 3.6;
       }
@@ -143,7 +181,7 @@ export async function buildSalesOrderPdf(
   } else {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    doc.text(`Method: ${paymentMethodLabel ?? '—'}`, rightColumnX, paymentsY);
+    writeText(`Method: ${paymentMethodLabel ?? '—'}`, rightColumnX, paymentsY);
     paymentsY += 3.6;
   }
   y = Math.max(y + 12, paymentsY) + 4;
@@ -152,8 +190,8 @@ export async function buildSalesOrderPdf(
   drawLabel('Sold by', rightColumnX, y);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text(order.customerName || '—', MARGIN, y + 5);
-  doc.text(order.soldByName, rightColumnX, y + 5);
+  writeText(order.customerName || '—', MARGIN, y + 5);
+  writeText(order.soldByName, rightColumnX, y + 5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   const billToLines = [...order.customerAddressLines, ...(order.customerPhone ? [order.customerPhone] : [])];
@@ -188,6 +226,9 @@ export async function buildSalesOrderPdf(
       4: { cellWidth: 28, halign: 'right' },
     },
     margin: { left: MARGIN, right: MARGIN, bottom: PAGE_HEIGHT - CONTENT_BOTTOM },
+    didParseCell: ({ cell }) => {
+      if (chineseFont && CHINESE_TEXT.test(cell.text.join(''))) cell.styles.font = CHINESE_FONT_FAMILY;
+    },
   });
   y = ensureRoom(lastTableBottom(doc, y) + 6, 34);
 
@@ -202,10 +243,10 @@ export async function buildSalesOrderPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
   doc.setTextColor(...BURNT);
-  doc.text('Customer signature', MARGIN, y + signatureHeight + 4);
+  writeText('Customer signature', MARGIN, y + signatureHeight + 4);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...MUTED);
-  doc.text(
+  writeText(
     [order.customerName, order.customerPhone].filter(Boolean).join(' · '),
     MARGIN,
     y + signatureHeight + 8,
@@ -221,8 +262,8 @@ export async function buildSalesOrderPdf(
   doc.setFontSize(9);
   for (const [label, amount] of totalRows) {
     doc.setFont('helvetica', 'normal');
-    doc.text(label, rightColumnX, totalsY);
-    doc.text(formatMoney(amount), PAGE_WIDTH - MARGIN, totalsY, { align: 'right' });
+    writeText(label, rightColumnX, totalsY);
+    writeText(formatMoney(amount), PAGE_WIDTH - MARGIN, totalsY, { align: 'right' });
     totalsY += 5;
   }
   doc.setDrawColor(...INK);
@@ -230,8 +271,8 @@ export async function buildSalesOrderPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(...BURNT);
-  doc.text('Balance due', rightColumnX, totalsY + 2.5);
-  doc.text(formatMoney(order.balance), PAGE_WIDTH - MARGIN, totalsY + 2.5, { align: 'right' });
+  writeText('Balance due', rightColumnX, totalsY + 2.5);
+  writeText(formatMoney(order.balance), PAGE_WIDTH - MARGIN, totalsY + 2.5, { align: 'right' });
   doc.setTextColor(...INK);
   y = Math.max(y + signatureHeight + 8, totalsY + 2.5) + 8;
 
@@ -248,7 +289,7 @@ export async function buildSalesOrderPdf(
   doc.setFontSize(7.5);
   doc.setTextColor(...MUTED);
   for (const lines of wrappedTerms) {
-    doc.text(lines, MARGIN, y);
+    writeText(lines, MARGIN, y);
     y += lines.length * 3.2 + 0.8;
   }
 
@@ -258,9 +299,9 @@ export async function buildSalesOrderPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(...MUTED);
-    doc.text(order.id, MARGIN, PAGE_HEIGHT - 8);
-    doc.text(`${COMPANY_LEGAL.portalLabel} · ${formatIsoDate(order.date)}`, PAGE_WIDTH / 2, PAGE_HEIGHT - 8, { align: 'center' });
-    doc.text(`Page ${page} of ${pageCount}`, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 8, { align: 'right' });
+    writeText(order.id, MARGIN, PAGE_HEIGHT - 8);
+    writeText(`${COMPANY_LEGAL.portalLabel} · ${formatIsoDate(order.date)}`, PAGE_WIDTH / 2, PAGE_HEIGHT - 8, { align: 'center' });
+    writeText(`Page ${page} of ${pageCount}`, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 8, { align: 'right' });
   }
 
   return new File([doc.output('blob')], `${order.id}.pdf`, { type: 'application/pdf' });
