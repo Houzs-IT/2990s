@@ -181,6 +181,12 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.62.11
         version: 5.100.9(react@19.2.6)
+      jspdf:
+        specifier: ^2.5.2
+        version: 2.5.2
+      jspdf-autotable:
+        specifier: ^3.8.4
+        version: 3.8.4(jspdf@2.5.2)
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.2.6)
