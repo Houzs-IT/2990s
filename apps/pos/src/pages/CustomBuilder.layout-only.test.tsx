@@ -1,9 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { Cell, SofaProductPricing } from '@2990s/shared';
+import type { SofaCustomizerData } from '../lib/queries';
+import type { PlacedAccessory, SofaAccessoryOption } from '../lib/sofa-accessories';
 
 // The canvas needs no backend; prevent API clients from initialising real sessions.
 vi.mock('../lib/supabase', () => ({ supabase: {} }));
@@ -84,6 +86,61 @@ describe('CustomBuilder in layoutOnly mode (Marketing)', () => {
     expect(screen.queryByText(/Save as Quick Pick/)).toBeNull();
     // Still the same canvas.
     expect(screen.getByText('Custom build · drag to lay out')).toBeInTheDocument();
+  });
+});
+
+/* 2026-11-05: the Marketing canvas offers the POS's Sofa Accessories too —
+   same palette, same pieces on the canvas — still without prices. */
+describe('CustomBuilder layoutOnly with Sofa Accessories (Marketing)', () => {
+  const ACCESSORIES: SofaAccessoryOption[] = [
+    { modelId: 'bc06', productId: 'p-bc06', code: 'BC06', name: 'BACK CUSHION 06', priceSen: 39_950, role: 'back', armWidthCm: 20 },
+    { modelId: 'ar01', productId: 'p-ar01', code: 'AR01', name: 'ARM REST 01', priceSen: null, role: 'arm', armWidthCm: 20 },
+  ];
+  const POOL: SofaCustomizerData = {
+    compartments: [
+      { code: '1A(LHF)', normalizedCode: '1A(LHF)', label: '1A(LHF)', priceSen: 0, imageUrl: null, group: '1-seater' },
+      { code: '2NA', normalizedCode: '2NA', label: '2NA', priceSen: 0, imageUrl: null, group: '2-seater' },
+    ],
+    sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [],
+    accessories: ACCESSORIES, accessoriesNeeded: [], modelId: '', modelName: '', modelCode: '',
+  };
+  const PLACED: PlacedAccessory[] = [{ id: 'piece-1', modelId: 'bc06', cellId: 'b', slot: 0 }];
+
+  const mountMarketing = (onAccessoriesChange = vi.fn(), state: 'ready' | 'pending' = 'ready') => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <CustomBuilder
+          productId="" productName="" pricing={PRICING} depth="24" cells={threePlusL()} setCells={vi.fn()} onAdded={() => {}}
+          layoutOnly={{ railBlock: <div>Marketing rail</div> }}
+          modelCustomizer={POOL} modelCustomizerState={state}
+          initialAccessories={PLACED} onAccessoriesChange={onAccessoriesChange}
+        />
+      </QueryClientProvider>,
+    );
+    return { ...view, onAccessoriesChange };
+  };
+
+  it('offers every accessory, unpriced ones too, without a price', () => {
+    mountMarketing();
+    expect(screen.getByText('Sofa accessories')).toBeInTheDocument();
+    expect(screen.getByText('BC06')).toBeInTheDocument();
+    expect(screen.getByText('AR01').closest('button')).not.toBeDisabled();
+    expect(screen.queryByText(/399\.50|RM 399|Price not set/)).toBeNull();
+  });
+
+  it('draws the saved piece on the canvas and adds a new one from the palette', () => {
+    const { onAccessoriesChange } = mountMarketing();
+    expect(screen.getByLabelText('BACK CUSHION 06 · Back cushion')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('BC06').closest('button')!);
+    const last = onAccessoriesChange.mock.calls.at(-1)![0] as PlacedAccessory[];
+    expect(last).toHaveLength(2);
+    expect(last.every((p) => p.modelId === 'bc06')).toBe(true);
+  });
+
+  it('keeps the saved pieces while the accessory list is still loading', () => {
+    const { onAccessoriesChange } = mountMarketing(vi.fn(), 'pending');
+    expect(onAccessoriesChange.mock.calls.at(-1)![0]).toEqual(PLACED);
   });
 });
 

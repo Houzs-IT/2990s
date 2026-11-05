@@ -177,15 +177,15 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
     if (photoErr) setErr(photoErr);
   };
 
-  const saveBuilt = ({ layout, modules }: BuiltSofa) => {
+  const saveBuilt = ({ layout, modules, accessories }: BuiltSofa) => {
     if (!builder) return;
     if (builder.target === 'combo') {
       const rows = [...d.rows];
-      if (builder.idx >= 0) rows[builder.idx] = { ...rows[builder.idx]!, modules, layout };
-      else rows.push({ modules, layout, price: '' });
+      if (builder.idx >= 0) rows[builder.idx] = { ...rows[builder.idx]!, modules, layout, accessories };
+      else rows.push({ modules, layout, accessories, price: '' });
       patch({ rows });
     } else {
-      patch({ modules, layout, rows: d.rows.length ? d.rows : [{ modules, layout, price: '' }] });
+      patch({ modules, layout, accessories, rows: d.rows.length ? d.rows : [{ modules, layout, accessories, price: '' }] });
     }
     setBuilder(null);
   };
@@ -261,7 +261,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                         <div className={s.replacePreview}>
                           {rep?.type === 'sofa' && (
                             <div className={s.replaceThumb}>
-                              <SofaLayoutPreview layout={rep.layout} modules={rep.modules} depth={seatDepth(rep.seat)} art={art} />
+                              <SofaLayoutPreview layout={rep.layout} pieces={rep.accessories} pieceOptions={opts.sofaAccessoryById} modules={rep.modules} depth={seatDepth(rep.seat)} art={art} />
                             </div>
                           )}
                           <span className={s.replaceText}>
@@ -279,7 +279,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
               {isSofa && (
                 <div className={`${s.stepCard} ${s.stepCardBordered}`}>
                   <div className={s.stepThumb}>
-                    <SofaLayoutPreview layout={d.layout} modules={d.modules} depth={depth} art={art} pad={6} />
+                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} pad={6} />
                   </div>
                   <div className={s.stepText}>
                     <span className={s.fieldLabel}>Step 1 · Components<ToFill on={nd(!d.modules.length)} /></span>
@@ -497,7 +497,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                       <div key={i} className={`${s.comboGrid} ${s.comboRow}`}>
                         <span className={s.comboN}>{i + 1}</span>
                         <div className={s.comboThumb}>
-                          <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={depth} art={art} />
+                          <SofaLayoutPreview layout={r.layout} pieces={r.accessories} pieceOptions={opts.sofaAccessoryById} modules={r.modules} depth={depth} art={art} />
                         </div>
                         <span className={s.comboText}>
                           <span className={s.comboShape}>{shapeName(r.modules)}</span>
@@ -542,7 +542,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
               {isSofa && (
                 <>
                   <div className={s.previewPlain}>
-                    <SofaLayoutPreview layout={d.layout} modules={d.modules} depth={depth} art={art} dims />
+                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} dims />
                   </div>
                   <div className={s.previewShape}>{shapeName(d.modules)}</div>
                 </>
@@ -573,8 +573,10 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
         <ComponentBuilder
           context={builder.target === 'combo' ? 'Combo price · lay out the components for this combo' : 'New product launch · Sofa'}
           initialLayout={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.layout : null) : d.layout}
+          initialAccessories={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.accessories : null) : d.accessories}
           initialModules={builder.target === 'combo' ? (builder.idx >= 0 ? d.rows[builder.idx]?.modules ?? [] : []) : d.modules}
           pool={opts.sofaPool}
+          poolState={opts.sofaPoolState}
           seats={seatOpts}
           seat={d.seat}
           onSeat={(v) => patch({ seat: v })}

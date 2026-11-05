@@ -575,7 +575,7 @@ describe('launch requests', () => {
     state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', modules: [], combo_rows: [{ modules: ['2A(LHF)'], price: null }] };
     const res = await app().request('/marketing/requests', json('POST', { ...base, rows: [{ modules: ['2A(LHF)'], price: null }] }), env);
     const body = await res.json() as { request: { rows: unknown[] } };
-    expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null, layout: null }]);
+    expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null, layout: null, accessories: null }]);
   });
 
   /* 0220: the sofa as laid out on the Custom build canvas. */
@@ -615,6 +615,51 @@ describe('launch requests', () => {
     const res = await app().request('/marketing/state', { headers: auth }, env);
     const body = await res.json() as { requests: Array<{ id: string; layout: unknown }> };
     expect(body.requests.map((r) => r.layout)).toEqual([LAYOUT, null]);
+  });
+
+  /* 0223: Sofa Accessory pieces placed on the layout. */
+  const PIECES = [
+    { id: 'p1', modelId: 'acc-back', cellId: 'c1', slot: 0 },
+    { id: 'p2', modelId: 'acc-arm', cellId: 'c2', slot: 2 },
+  ];
+
+  it('stores the pieces on a request and its combos, dropping one off the layout', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], layout: LAYOUT, accessories: PIECES };
+    const stray = { id: 'p9', modelId: 'acc-back', cellId: 'gone', slot: 1 };
+    const res = await app().request('/marketing/requests', json('POST', {
+      ...base, modules: ['2A(LHF)', 'L(RHF)'], layout: LAYOUT, accessories: [...PIECES, stray],
+      rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: 3540, layout: LAYOUT, accessories: PIECES }],
+    }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ accessories: PIECES, combo_rows: [{ layout: LAYOUT, accessories: PIECES }] });
+    expect((await res.json() as { request: { accessories: unknown } }).request.accessories).toEqual(PIECES);
+  });
+
+  it('keeps no pieces without a layout, and refuses a malformed one', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    await app().request('/marketing/requests', json('POST', { ...base, accessories: PIECES }), env);
+    expect(state.inserted).toMatchObject({ accessories: null });
+    state.inserted = null;
+    const bad = await app().request('/marketing/requests', json('POST', {
+      ...base, layout: LAYOUT, accessories: [{ id: 'p1', modelId: 'acc-back', cellId: 'c1', slot: -1 }],
+    }), env);
+    expect(bad.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('stores a sofa display’s pieces and reads them back; a mattress gets none', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'd2', venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['2A(LHF)', 'L(RHF)'], qty: 1, is_new: false, layout: LAYOUT, accessories: PIECES };
+    const sofa = await app().request('/marketing/displays', json('POST', {
+      venueId: '107', type: 'sofa', name: 'BOOQIT', modules: ['2A(LHF)', 'L(RHF)'], layout: LAYOUT, accessories: PIECES,
+    }), env);
+    expect(sofa.status).toBe(201);
+    expect(state.inserted).toMatchObject({ accessories: PIECES });
+    expect((await sofa.json() as { display: { accessories: unknown } }).display.accessories).toEqual(PIECES);
+    await app().request('/marketing/displays', json('POST', { venueId: '107', type: 'mattress', name: 'AKKA', layout: LAYOUT, accessories: PIECES }), env);
+    expect(state.inserted).toMatchObject({ accessories: null });
   });
 
   it('serves a request photo with its Exact / Non-exact note, or null', async () => {

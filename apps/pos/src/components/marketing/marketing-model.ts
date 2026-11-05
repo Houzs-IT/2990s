@@ -7,12 +7,19 @@
 // ----------------------------------------------------------------------------
 
 import { findModule, isAccessoryModule, normalizeCompartmentCode, type Cell } from '@2990s/shared/sofa-build';
+import type { PlacedAccessory } from '../../lib/sofa-accessories';
 
 /** A sofa as laid out on the Custom build canvas (owner 2026-10-09): each
  *  compartment with its position and rotation, in cm — what `modules` alone
  *  cannot say (a chaise turned 90°, a corner, two rows). null on a record
  *  saved before the canvas, which has only its left-to-right `modules`. */
 export type SofaLayout = Cell[];
+
+/** The Sofa Accessory pieces placed on a layout (0223) — back cushions, sand
+ *  backs, extra arms — in the Custom build's own shape (lib/sofa-accessories.ts
+ *  PlacedAccessory, no per-piece colour: Marketing's colour is the sofa's).
+ *  Each hangs on a layout cell by id, so they only mean something with it. */
+export type SofaPieces = Array<Pick<PlacedAccessory, 'id' | 'modelId' | 'cellId' | 'slot'>>;
 
 /** The seat a form shows ('28"', 'Flat') as the depth the canvas measures
  *  modules with ('28'). A seat that is not a size lays out at the 24" baseline,
@@ -82,6 +89,8 @@ export interface DisplayItem {
   photoAt: string | null;
   /** How the sofa is laid out (0220); null when recorded before the canvas. */
   layout: SofaLayout | null;
+  /** The pieces placed on that layout (0223); absent / null when none. */
+  accessories?: SofaPieces | null;
 }
 
 /** One combo on a launch request's reference price list. `price` is the raw
@@ -91,6 +100,7 @@ export interface ComboRow {
   price: string;
   /** The combo as laid out on the canvas; absent on one saved before it. */
   layout?: SofaLayout | null;
+  accessories?: SofaPieces | null;
 }
 
 /** An image downscaled in the browser and ready to send (lib/marketing-api.ts). */
@@ -124,6 +134,8 @@ export interface LaunchRequest {
   /** The sofa as laid out on the canvas (0220); null before it is built, or
    *  on a request saved before the canvas. `modules` is its left-to-right read. */
   layout: SofaLayout | null;
+  /** The pieces placed on that layout (0223); absent / null when none. */
+  accessories?: SofaPieces | null;
   /* Sofa only (owner 2026-10-09, migration 0219). */
   /** Length × width in cm, the raw input text — '' until typed. */
   lengthCm: string;
@@ -403,6 +415,7 @@ export type DuplicateSource =
   | { kind: 'request'; request: LaunchRequest };
 
 const copyLayout = (l: SofaLayout | null | undefined): SofaLayout | null => (l ? l.map((c) => ({ ...c })) : null);
+const copyPieces = (p: SofaPieces | null | undefined): SofaPieces | null => (p?.length ? p.map((x) => ({ ...x })) : null);
 const cmText = (n: number | null): string => (n == null ? '' : String(n));
 
 /** The fields a launch request form takes from a source. The photo is not
@@ -414,9 +427,9 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
     return {
       type: r.type, supplierCode: r.supplierCode, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
       seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules],
-      layout: copyLayout(r.layout), lengthCm: r.lengthCm, widthCm: r.widthCm, sofaCategory: r.sofaCategory,
-      sofaFunction: r.sofaFunction,
-      rows: r.rows.map((x) => ({ modules: [...x.modules], price: x.price, layout: copyLayout(x.layout) })),
+      layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), lengthCm: r.lengthCm, widthCm: r.widthCm,
+      sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
+      rows: r.rows.map((x) => ({ modules: [...x.modules], price: x.price, layout: copyLayout(x.layout), accessories: copyPieces(x.accessories) })),
     };
   }
   const x = src.item;
@@ -424,6 +437,7 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
   return {
     type: x.type, model: x.name, fabric: x.fabric, colour: x.colour, leg: x.leg, seat: x.seat, size: x.size,
     height: x.height, divan: x.divan, gap: x.gap, modules: [...x.modules], layout: copyLayout(x.layout),
+    accessories: copyPieces(x.accessories),
     // A piece from the launch board carries what its request said (Arrive
     // copied it); a catalogue piece never had these.
     ...(x.sourceRequestId ? {
@@ -464,6 +478,7 @@ export interface DisplayCopy {
   gap: string;
   modules: string[];
   layout: SofaLayout | null;
+  accessories: SofaPieces | null;
   qty: number;
   lengthCm: number | null;
   widthCm: number | null;
@@ -478,7 +493,7 @@ export function displayCopyFrom(src: DuplicateSource): DisplayCopy {
     return {
       type: x.type, modelId: x.modelId, name: x.name, code: x.code, photoUrl: x.photoUrl, fabric: x.fabric,
       colour: x.colour, leg: x.leg, seat: x.seat, size: x.size, height: x.height, divan: x.divan, gap: x.gap,
-      modules: [...x.modules], layout: copyLayout(x.layout), qty: x.qty || 1, lengthCm: x.lengthCm, widthCm: x.widthCm,
+      modules: [...x.modules], layout: copyLayout(x.layout), accessories: copyPieces(x.accessories), qty: x.qty || 1, lengthCm: x.lengthCm, widthCm: x.widthCm,
       sofaCategory: x.sofaCategory, sofaFunction: x.sofaFunction, sourceRequestId: x.sourceRequestId,
     };
   }
@@ -487,7 +502,7 @@ export function displayCopyFrom(src: DuplicateSource): DisplayCopy {
     // The name Arrive would give it; a request may not have one yet.
     type: r.type, modelId: null, name: r.model.trim() || `Untitled ${typeOf(r.type).label.toLowerCase()}`,
     code: r.supplierCode, photoUrl: null, fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, size: r.size,
-    height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules], layout: copyLayout(r.layout), qty: 1,
+    height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules], layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), qty: 1,
     lengthCm: cmOf(r.lengthCm), widthCm: cmOf(r.widthCm), sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
     sourceRequestId: r.id,
   };

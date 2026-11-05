@@ -120,7 +120,7 @@ const showroomWire = (r: Row) => ({ id: r.id, name: r.name, area: r.area });
 const displayWire = (r: Row) => ({
   id: r.id, venueId: r.venue_id, type: r.type, modelId: r.model_id, name: r.name, code: r.code, photoUrl: r.photo_url, isNew: r.is_new,
   fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, modules: r.modules, size: r.size, height: r.height, divan: r.divan,
-  gap: r.gap, qty: r.qty, layout: r.layout ?? null, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
+  gap: r.gap, qty: r.qty, layout: r.layout ?? null, accessories: r.accessories ?? null, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '',
   sofaFunction: r.sofa_function ?? '', sourceRequestId: r.source_request_id ?? null, createdAt: r.created_at, createdByName: r.created_by_name,
   // The API's: the photo time of the request a sofa came from.
   photoAt: r.type === 'sofa' && r.source_request_id ? photos()[r.source_request_id]?.updated_at ?? null : null,
@@ -129,7 +129,7 @@ const displayWire = (r: Row) => ({
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
-  seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: r.modules, layout: r.layout ?? null,
+  seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: r.modules, layout: r.layout ?? null, accessories: r.accessories ?? null,
   rows: r.combo_rows, venueId: r.venue_id, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '', sofaFunction: r.sofa_function ?? '',
   photoMatch: r.photo_match ?? '', photoNote: r.photo_note ?? '', photoAt: photos()[r.id]?.updated_at ?? null,
   action: r.action, replaceId: r.replace_display_id, by: r.requested_by_name, byRole: r.requested_by_role, createdAt: r.created_at, updatedAt: r.created_at,
@@ -137,7 +137,7 @@ const requestWire = (r: Row) => ({
 const requestCols = (b: Row) => ({
   type: b.type, status: b.status, supplier_code: b.supplierCode ?? '', model: b.model ?? '', fabric: b.fabric ?? '', colour: b.colour ?? '',
   leg: b.leg ?? '', seat: b.seat ?? '', size: b.size ?? '', height: b.height ?? '', divan: b.divan ?? '', gap: b.gap ?? '',
-  modules: b.modules ?? [], layout: b.layout ?? null, length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
+  modules: b.modules ?? [], layout: b.layout ?? null, accessories: b.accessories ?? null, length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
   sofa_function: b.sofaFunction ?? '', photo_match: b.photoMatch ?? '', photo_note: b.photoMatch === 'non_exact' ? (b.photoNote ?? '') : '',
   combo_rows: b.rows ?? [], venue_id: b.venueId, action: b.action,
   replace_display_id: b.action === 'replace' ? (b.replaceId ?? null) : null,
@@ -322,7 +322,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     const sofa = body.type === 'sofa';
     const row = display(`sim-d${st.serial++}`, body.venueId, body.type, body.name, body.code ?? '', body.photoUrl ?? null, {
       model_id: body.modelId ?? null, fabric: body.fabric ?? '', colour: body.colour ?? '', leg: body.leg ?? '', seat: body.seat ?? '',
-      modules: body.modules ?? [], layout: sofa ? (body.layout ?? null) : null, size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
+      modules: body.modules ?? [], layout: sofa ? (body.layout ?? null) : null, accessories: sofa ? (body.accessories ?? null) : null, size: body.size ?? '', height: body.height ?? '', divan: body.divan ?? '', gap: body.gap ?? '',
       qty: body.qty ?? 1, is_new: !!body.sourceRequestId, source_request_id: body.sourceRequestId ?? null,
       length_cm: sofa ? (body.lengthCm ?? null) : null, width_cm: sofa ? (body.widthCm ?? null) : null,
       sofa_category: sofa ? (body.sofaCategory ?? '') : '', sofa_function: sofa ? (body.sofaFunction ?? '') : '',
@@ -392,7 +392,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
         if (old) { old.removed_at = now(); removedName = old.name; }
       }
       const created = display(`sim-d${st.serial++}`, row.venue_id, row.type, row.model, row.supplier_code, null, {
-        is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, layout: row.layout ?? null, size: row.size,
+        is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, layout: row.layout ?? null, accessories: row.accessories ?? null, size: row.size,
         height: row.height, divan: row.divan, gap: row.gap, length_cm: row.length_cm ?? null, width_cm: row.width_cm ?? null,
         sofa_category: row.sofa_category ?? '', sofa_function: row.sofa_function ?? '', source_request_id: row.id,
         created_at: now(), created_by_name: me.name,
