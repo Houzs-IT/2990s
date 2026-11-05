@@ -7,6 +7,10 @@
 // catalogue, so its copy keeps its own name and code — its own tile, ahead of
 // the catalogue's — and the launch request it came from, which brings its
 // photo and NEW pill, as Arrive would.
+//
+// Edit (YH 2026-11-05): the same form reopens a piece already on the floor,
+// filled from it, and saves through PATCH. Its showroom and type stay, and so
+// does what a new product carried (its request, NEW) — so no Duplicate there.
 
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, X } from 'lucide-react';
@@ -19,7 +23,7 @@ import {
   allowedOr, coloursOf, fabricsFor, preferred, withValue,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
-import { piecesOut, preparePhoto, useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
+import { piecesOut, preparePhoto, useAddDisplay, useDisplayPhoto, useEditDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
@@ -85,7 +89,7 @@ function freshAdd(opts: MarketingOptions, type: DisplayType): AddState {
 
 /** A source as this form takes it: a catalogue piece picks its Model; any
  *  other keeps its own name and code. */
-function copiedAdd(opts: MarketingOptions, c: DisplayCopy): AddState {
+export function copiedAdd(opts: MarketingOptions, c: DisplayCopy): AddState {
   const inCatalogue = !!c.modelId && opts.models[c.type].some((m) => m.id === c.modelId);
   return {
     type: c.type, modelId: inCatalogue ? c.modelId! : '', size: c.size, height: c.height, fabric: c.fabric, colour: c.colour,
@@ -102,24 +106,32 @@ const bg = (url: string | null | undefined) => (url ? { backgroundImage: `url("$
  *  "—" rather than as the first option it is not. */
 const blankOption = (v: string) => (v ? null : <option value="">—</option>);
 
-export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms, onClose, onAdded }: {
+export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms, editing, onClose, onAdded }: {
   showroom: ShowroomOption;
   opts: MarketingOptions;
   /** What Duplicate can copy: every floor's pieces, and the launch board. */
   displays: DisplayItem[];
   requests: LaunchRequest[];
   showrooms: ShowroomOption[];
+  /** A piece on the floor to edit, instead of adding a new one. */
+  editing?: DisplayItem;
   onClose: () => void;
   onAdded: (name: string) => void;
 }) => {
-  const [a, setA] = useState<AddState>(() => freshAdd(opts, 'sofa'));
+  const [a, setA] = useState<AddState>(() => (editing ? copiedAdd(opts, displayCopyFrom({ kind: 'display', item: editing })) : freshAdd(opts, 'sofa')));
   const [building, setBuilding] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const add = useAddDisplay();
+  const edit = useEditDisplay();
+  const pending = add.isPending || edit.isPending;
   const [err, setErr] = useState('');
   /** 2990-0021: a note and a photo kept with this display (PNG / JPG). */
-  const [remarks, setRemarks] = useState('');
+  const [remarks, setRemarks] = useState(editing?.remarks ?? '');
   const [ownPhoto, setOwnPhoto] = useState<PreparedImage | null>(null);
+  /** The photo the edited piece already has, until it is removed or replaced. */
+  const savedPhoto = useDisplayPhoto(editing?.id ?? null, editing?.ownPhotoAt ?? null).data ?? null;
+  const [dropSaved, setDropSaved] = useState(false);
+  const shownPhoto = ownPhoto ? `data:${ownPhoto.contentType};base64,${ownPhoto.dataB64}` : dropSaved ? null : savedPhoto;
   const [photoBusy, setPhotoBusy] = useState(false);
   const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -189,6 +201,15 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
       ...(isSofa ? { lengthCm: product.lengthCm, widthCm: product.widthCm, sofaCategory: product.sofaCategory, sofaFunction: product.sofaFunction } : {}),
     } : {};
     try {
+      if (editing) {
+        const photoChange = ownPhoto ? { ownPhoto } : dropSaved && editing.ownPhotoAt ? { ownPhoto: null } : {};
+        await edit.mutateAsync({
+          id: editing.id, modelId: ident.modelId, name: ident.name, code: ident.code,
+          photoUrl: isSofa ? null : ident.photoUrl, ...extra, remarks: remarks.trim(), ...photoChange,
+        });
+        onAdded(ident.name);
+        return;
+      }
       await add.mutateAsync({
         venueId: showroom.id, type: a.type, modelId: ident.modelId, name: ident.name, code: ident.code,
         photoUrl: isSofa ? null : ident.photoUrl, ...extra, ...carried,
@@ -209,10 +230,10 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
   return (
     <>
       <div className={s.modalScrim}>
-        <div className={s.modal} role="dialog" aria-label="Add on display">
+        <div className={s.modal} role="dialog" aria-label={editing ? 'Edit display' : 'Add on display'}>
           <div className={s.modalHead}>
             <div>
-              <div className={s.modalTitle}>Add on display</div>
+              <div className={s.modalTitle}>{editing ? `Edit ${editing.name}` : 'Add on display'}</div>
               <div className={s.modalSub}>{showroom.name} · same options as a Sales Order line</div>
             </div>
             <button type="button" className={s.closeBtn} aria-label="Close" onClick={onClose}>
@@ -221,14 +242,14 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
           </div>
           <div className={s.modalGrid}>
             <div className={s.modalLeft}>
-              <div className={s.chipRow}>
+              {!editing && <div className={s.chipRow}>
                 {TYPES.map((t) => (
                   <button key={t.id} type="button" className={`${s.typeChip} ${a.type === t.id ? s.chipOn : ''}`} onClick={() => setA(freshAdd(opts, t.id))}>
                     {t.label}
                   </button>
                 ))}
                 <FormMoreMenu onDuplicate={() => setDuplicating(true)} />
-              </div>
+              </div>}
 
               {isSofa && (
                 <div className={s.stepCard}>
@@ -359,10 +380,10 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
 
               <div className={s.field}>
                 <span className={s.fieldLabel}>Photo</span>
-                {ownPhoto ? (
+                {shownPhoto ? (
                   <div className={s.photoCard}>
-                    <img src={`data:${ownPhoto.contentType};base64,${ownPhoto.dataB64}`} alt="Photo to attach" className={s.refPhotoImg} />
-                    <button type="button" className={s.ghostBtn} onClick={() => setOwnPhoto(null)}>Remove photo</button>
+                    <img src={shownPhoto} alt="Photo to attach" className={s.refPhotoImg} />
+                    <button type="button" className={s.ghostBtn} onClick={() => { setOwnPhoto(null); setDropSaved(true); }}>Remove photo</button>
                   </div>
                 ) : (
                   <label className={s.planStrip}>
@@ -388,8 +409,8 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
               </div>
               {err && <div className={s.formError}>{err}</div>}
               <div className={s.spacer} />
-              <button type="button" className={s.submitBig} disabled={add.isPending || (!ident && !isSofa)} onClick={() => void submit()}>
-                Add to {showroom.name}
+              <button type="button" className={s.submitBig} disabled={pending || (!ident && !isSofa)} onClick={() => void submit()}>
+                {editing ? 'Save changes' : `Add to ${showroom.name}`}
               </button>
             </div>
           </div>
@@ -398,7 +419,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
 
       {building && (
         <ComponentBuilder
-          context={`Add on display · ${showroom.name}`}
+          context={`${editing ? 'Edit display' : 'Add on display'} · ${showroom.name}`}
           initialLayout={a.layout}
           initialAccessories={a.accessories}
           initialModules={a.modules}

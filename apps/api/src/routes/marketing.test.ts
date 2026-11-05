@@ -420,6 +420,68 @@ describe('displays', () => {
     expect(state.updated).toBeNull();
   });
 
+  /* YH 2026-11-05: edit a piece on the floor, and upload / replace / remove its photo. */
+  it('edits what was picked on a piece, never its showroom, type or the request it came from', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S', '2A'], qty: 1 };
+    const layout = [{ moduleId: '1S', x: 0, y: 0, rot: 0 }];
+    const res = await app().request(`/marketing/displays/${DID}`, json('PATCH', {
+      modelId: 'm2', name: 'BOOQIT', code: 'BQ', fabric: 'Linen', colour: 'Sand', leg: '4"', seat: '28"',
+      modules: ['1S', '2A'], layout, remarks: ' x ',
+      venueId: '999', type: 'mattress', sourceRequestId: '6f1f6c1e-0000-4000-8000-0000000000a1', isNew: true,
+    }), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toEqual({
+      model_id: 'm2', name: 'BOOQIT', code: 'BQ', fabric: 'Linen', colour: 'Sand', leg: '4"', seat: '28"',
+      modules: ['1S', '2A'], layout, remarks: 'x',
+    });
+  });
+
+  it('refuses a sofa edited down to no components, and gives a mattress no layout', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, type: 'sofa' };
+    const empty = await app().request(`/marketing/displays/${DID}`, json('PATCH', { modules: [] }), env);
+    expect(empty.status).toBe(400);
+    expect(state.updated).toBeNull();
+    state.maybe = { id: DID, type: 'mattress', modules: [], qty: 1 };
+    await app().request(`/marketing/displays/${DID}`, json('PATCH', { size: 'King', layout: [{ moduleId: '1S', x: 0, y: 0, rot: 0 }] }), env);
+    expect(state.updated).toEqual({ size: 'King', layout: null });
+  });
+
+  it('edits a sofa’s accessory pieces against the layout sent, else the one saved, and gives a mattress none', async () => {
+    meAnswers(MARKETING);
+    const layout = [{ id: 'c1', moduleId: '1S', x: 0, y: 0, rot: 0 }];
+    const kept = { id: 'p1', modelId: 'acc-back', cellId: 'c1', slot: 0 };
+    const stray = { id: 'p2', modelId: 'acc-back', cellId: 'gone', slot: 0 };
+    state.maybe = { id: DID, type: 'sofa', layout: null };
+    await app().request(`/marketing/displays/${DID}`, json('PATCH', { modules: ['1S'], layout, accessories: [kept, stray] }), env);
+    expect(state.updated).toMatchObject({ layout, accessories: [kept] });
+    state.maybe = { id: DID, type: 'sofa', layout };
+    await app().request(`/marketing/displays/${DID}`, json('PATCH', { accessories: [kept] }), env);
+    expect(state.updated).toEqual({ accessories: [kept] });
+    state.maybe = { id: DID, type: 'mattress', layout: null };
+    await app().request(`/marketing/displays/${DID}`, json('PATCH', { accessories: [kept] }), env);
+    expect(state.updated).toEqual({ accessories: null });
+  });
+
+  it('replaces a piece’s own photo, takes it off with null, and refuses one over 3 MB', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'mattress', name: 'AKKA', modules: [], qty: 1, own_photo_updated_at: 't' };
+    const put = await app().request(`/marketing/displays/${DID}`, json('PATCH', { ownPhoto: { contentType: 'image/png', dataB64: SHOT, fileName: 'b.png' } }), env);
+    expect(put.status).toBe(200);
+    expect(state.updated).toMatchObject({ own_photo_content_type: 'image/png', own_photo_b64: SHOT, own_photo_file_name: 'b.png' });
+    expect(typeof state.updated?.own_photo_updated_at).toBe('string');
+    expect(JSON.stringify(await put.json())).not.toContain(SHOT);
+    const off = await app().request(`/marketing/displays/${DID}`, json('PATCH', { ownPhoto: null }), env);
+    expect(off.status).toBe(200);
+    expect(state.updated).toEqual({ own_photo_content_type: null, own_photo_b64: null, own_photo_file_name: null, own_photo_updated_at: null });
+    state.updated = null;
+    const big = 'A'.repeat(Math.ceil((3 * 1024 * 1024 * 4) / 3) + 4);
+    const tooBig = await app().request(`/marketing/displays/${DID}`, json('PATCH', { ownPhoto: { contentType: 'image/png', dataB64: big } }), env);
+    expect(tooBig.status).toBe(413);
+    expect(state.updated).toBeNull();
+  });
+
   it('404s an edit of a display that is gone, and a bad id', async () => {
     meAnswers(MARKETING);
     state.maybe = null;

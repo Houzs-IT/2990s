@@ -262,7 +262,7 @@ const displayToWire = (r: Record<string, unknown>, photoAt: string | null = null
   createdByName: r.created_by_name == null ? null : String(r.created_by_name),
 });
 
-const displayCreateSchema = z.object({
+const displayFields = z.object({
   venueId,
   type: z.enum(['sofa', 'mattress', 'bedframe', 'accessory']),
   modelId: z.string().trim().max(64).nullable().optional(),
@@ -294,7 +294,9 @@ const displayCreateSchema = z.object({
   dimsWidthCm: cm.nullable().optional().default(null),
   dimsDepthCm: cm.nullable().optional().default(null),
   ownPhoto: imageSchema.optional(),
-}).superRefine((v, ctx) => {
+});
+
+const displayCreateSchema = displayFields.superRefine((v, ctx) => {
   if ((v.dimsWidthCm == null) !== (v.dimsDepthCm == null)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimsWidthCm'], message: 'Width and depth go together.' });
   }
@@ -761,22 +763,34 @@ marketing.post('/displays', async (c) => {
   return c.json({ display: displayToWire(data as unknown as Record<string, unknown>, photoAt) }, 201);
 });
 
-const displayEditSchema = z.object({
-  remarks: remarksField.optional(),
-  dimsWidthCm: cm.nullable().optional(),
-  dimsDepthCm: cm.nullable().optional(),
+// Edit (YH 2026-11-05): the same fields as Add on display, each optional (partial()
+// drops the defaults, so an absent field stays as saved). Never the showroom,
+// the type, or what a new product carried (its request, NEW, size, category,
+// function). `ownPhoto: null` takes the photo off.
+const displayEditSchema = displayFields.pick({
+  modelId: true, name: true, code: true, photoUrl: true, fabric: true, colour: true, leg: true, seat: true,
+  modules: true, layout: true, accessories: true, size: true, height: true, divan: true, gap: true, qty: true,
+  remarks: true, dimsWidthCm: true, dimsDepthCm: true,
+}).partial().extend({
+  ownPhoto: imageSchema.nullable().optional(),
 }).superRefine((v, ctx) => {
   if ((v.dimsWidthCm === undefined) !== (v.dimsDepthCm === undefined) || (v.dimsWidthCm == null) !== (v.dimsDepthCm == null)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dimsWidthCm'], message: 'Width and depth go together.' });
   }
-  if (v.remarks === undefined && v.dimsWidthCm === undefined) {
+  if (Object.values(v).every((x) => x === undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: 'Nothing to change.' });
   }
 });
 
-/** Edit what Marketing keeps on a piece: its remarks and the W x D drawn on its
- *  diagram (null both = back to the computed size). Never the product's own
- *  size, never another module. */
+const DISPLAY_EDIT_COLUMNS = {
+  modelId: 'model_id', name: 'name', code: 'code', photoUrl: 'photo_url', fabric: 'fabric', colour: 'colour',
+  leg: 'leg', seat: 'seat', modules: 'modules', layout: 'layout', size: 'size', height: 'height', divan: 'divan',
+  gap: 'gap', qty: 'qty', remarks: 'remarks',
+} as const;
+
+/** Edit a piece on the floor: what was picked when it was added, its remarks,
+ *  the W x D drawn on its diagram (null both = back to the computed size) and
+ *  its own photo. Only the fields sent change. */
 marketing.patch('/displays/:id', async (c) => {
   const g = await gate(c);
   if (!g.ok) return g.res;
@@ -787,12 +801,45 @@ marketing.patch('/displays/:id', async (c) => {
   const parsed = displayEditSchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const v = parsed.data;
-  const { data, error } = await admin(c)
+  const sb = admin(c);
+  const cols: Record<string, unknown> = {};
+  for (const [k, col] of Object.entries(DISPLAY_EDIT_COLUMNS)) {
+    const x = v[k as keyof typeof DISPLAY_EDIT_COLUMNS];
+    if (x !== undefined) cols[col] = x;
+  }
+  if (v.dimsWidthCm !== undefined) { cols.dims_width_cm = v.dimsWidthCm; cols.dims_depth_cm = v.dimsDepthCm; }
+  if (v.ownPhoto === null) {
+    Object.assign(cols, { own_photo_content_type: null, own_photo_b64: null, own_photo_file_name: null, own_photo_updated_at: null });
+  } else if (v.ownPhoto) {
+    const own = photoColumns(v.ownPhoto, new Date().toISOString());
+    if (!own.ok) return c.json(PHOTO_TOO_LARGE, 413);
+    Object.assign(cols, {
+      own_photo_content_type: own.cols.photo_content_type,
+      own_photo_b64: own.cols.photo_b64,
+      own_photo_file_name: own.cols.photo_file_name,
+      own_photo_updated_at: own.cols.photo_updated_at,
+    });
+  }
+  // The sofa rules of an add need the piece's type, which the edit never changes.
+  if (v.modules !== undefined || v.layout !== undefined || v.accessories !== undefined) {
+    const { data: cur, error: curErr } = await sb
+      .from('marketing_displays').select('id, type, layout').eq('id', id).is('removed_at', null).maybeSingle();
+    if (curErr) return c.json({ error: 'fetch_failed', reason: curErr.message }, 500);
+    if (!cur) return c.json({ error: 'not_found', reason: 'This piece is no longer on display.' }, 404);
+    const isSofa = (cur as { type?: string }).type === 'sofa';
+    if (isSofa && v.modules?.length === 0) {
+      return c.json({ error: 'validation_failed', issues: [{ path: ['modules'], message: 'A sofa needs its components.' }] }, 400);
+    }
+    if (!isSofa && v.layout !== undefined) cols.layout = null;
+    // Pieces hang on the layout being saved, else on the one already saved (0223).
+    if (v.accessories !== undefined) {
+      const onLayout = v.layout !== undefined ? v.layout : layoutToWire((cur as { layout?: unknown }).layout);
+      cols.accessories = isSofa ? piecesOn(onLayout, v.accessories) : null;
+    }
+  }
+  const { data, error } = await sb
     .from('marketing_displays')
-    .update({
-      ...(v.remarks !== undefined ? { remarks: v.remarks } : {}),
-      ...(v.dimsWidthCm !== undefined ? { dims_width_cm: v.dimsWidthCm, dims_depth_cm: v.dimsDepthCm } : {}),
-    })
+    .update(cols)
     .eq('id', id)
     .is('removed_at', null)
     .select(DISPLAY_SELECT)

@@ -276,12 +276,19 @@ export function useAddDisplay() {
   });
 }
 
-/** Edit what Marketing keeps on a piece: remarks, and the diagram's W × D
- *  (both null = back to the computed size). */
+/** An edit of a piece on the floor: only the fields sent change. The showroom,
+ *  the type and what a new product carried stay as saved. `ownPhoto: null`
+ *  takes its photo off. */
+export type DisplayEdit = Partial<Omit<NewDisplay, 'venueId' | 'type' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId' | 'ownPhoto'>> & {
+  dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhoto?: PreparedImage | null;
+};
+
+/** Edit a piece: what was picked, its remarks, the diagram's W × D (both null
+ *  = back to the computed size) and its own photo. */
 export function useEditDisplay() {
   const done = useInvalidate();
   return useMutation({
-    mutationFn: (p: { id: string; remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null }) => {
+    mutationFn: (p: { id: string } & DisplayEdit) => {
       const { id, ...body } = p;
       return call<{ display: WireDisplay }>(`/displays/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
     },
