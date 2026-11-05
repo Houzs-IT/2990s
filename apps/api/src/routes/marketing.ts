@@ -721,7 +721,7 @@ marketing.post('/displays', async (c) => {
   return c.json({ display: displayToWire(data as unknown as Record<string, unknown>, photoAt) }, 201);
 });
 
-// Edit (2990-0040): the same fields as Add on display, each optional (partial()
+// Edit (YH 2026-11-05): the same fields as Add on display, each optional (partial()
 // drops the defaults, so an absent field stays as saved). Never the showroom,
 // the type, or what a new product carried (its request, NEW, size, category,
 // function). `ownPhoto: null` takes the photo off.

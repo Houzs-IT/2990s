@@ -8,7 +8,7 @@
 // the catalogue's — and the launch request it came from, which brings its
 // photo and NEW pill, as Arrive would.
 //
-// Edit (2990-0040): the same form reopens a piece already on the floor,
+// Edit (YH 2026-11-05): the same form reopens a piece already on the floor,
 // filled from it, and saves through PATCH. Its showroom and type stay, and so
 // does what a new product carried (its request, NEW) — so no Duplicate there.
 

@@ -6,7 +6,7 @@ import { copiedAdd } from './AddDisplayModal';
 import { displayCopyFrom, type DisplayItem, type SofaLayout } from './marketing-model';
 import type { MarketingOptions } from './marketing-options';
 
-/* 2990-0040: Edit reopens a piece on the floor in the Add on display form,
+/* YH 2026-11-05: Edit reopens a piece on the floor in the Add on display form,
    filled from what was saved on it. */
 
 const item = (over: Partial<DisplayItem>): DisplayItem => ({

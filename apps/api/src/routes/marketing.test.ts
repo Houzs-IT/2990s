@@ -420,7 +420,7 @@ describe('displays', () => {
     expect(state.updated).toBeNull();
   });
 
-  /* 2990-0040: edit a piece on the floor, and upload / replace / remove its photo. */
+  /* YH 2026-11-05: edit a piece on the floor, and upload / replace / remove its photo. */
   it('edits what was picked on a piece, never its showroom, type or the request it came from', async () => {
     meAnswers(MARKETING);
     state.maybe = { id: DID, venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S', '2A'], qty: 1 };

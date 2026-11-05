@@ -47,7 +47,7 @@ const RequestPhoto = ({ requestId, version }: { requestId: string; version: stri
 };
 
 /** What Marketing keeps on a piece (2990-0021): its own photo (attached,
- *  replaced or removed here too — 2990-0040), its remarks, and — on a sofa —
+ *  replaced or removed here too — YH 2026-11-05), its remarks, and — on a sofa —
  *  the W × D printed on its diagram. Saved on this display only; the product's
  *  own size is never touched. */
 const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => void }) => {
