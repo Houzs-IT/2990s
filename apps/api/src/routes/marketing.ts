@@ -122,6 +122,37 @@ const layoutToWire = (raw: unknown): LayoutCell[] | null => {
   return cells.length ? cells : null;
 };
 
+/** A Sofa Accessory piece placed on that layout (0223) — the POS Custom build's
+ *  PlacedAccessory (apps/pos/src/lib/sofa-accessories.ts) without a colour of
+ *  its own: back / back-support `slot` is a place along the module's back,
+ *  arm `slot` is the side (0 left, 2 right). It hangs on a layout cell by id. */
+const sofaPiece = z.object({
+  id: z.string().trim().min(1).max(64),
+  modelId: z.string().trim().min(1).max(64),
+  cellId: z.string().trim().min(1).max(64),
+  slot: z.number().int().min(0).max(30),
+});
+const sofaPieces = z.array(sofaPiece).max(60).nullable().optional().default(null);
+type SofaPiece = z.infer<typeof sofaPiece>;
+
+/** Read stored pieces back, keeping only well-formed ones; null when none. */
+const piecesToWire = (raw: unknown): SofaPiece[] | null => {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const pieces = raw.flatMap((p) => {
+    const r = sofaPiece.safeParse(p);
+    return r.success ? [r.data] : [];
+  });
+  return pieces.length ? pieces : null;
+};
+
+/** Pieces are kept only with a layout that has the cell each one hangs on. */
+const piecesOn = (layout: LayoutCell[] | null, pieces: SofaPiece[] | null): SofaPiece[] | null => {
+  if (!layout?.length || !pieces?.length) return null;
+  const ids = new Set(layout.flatMap((c) => (c.id ? [c.id] : [])));
+  const kept = pieces.filter((p) => ids.has(p.cellId));
+  return kept.length ? kept : null;
+};
+
 /** Postgres unique_violation. */
 const isDuplicate = (e: { code?: string } | null): boolean => e?.code === '23505';
 
@@ -183,7 +214,7 @@ const remarksField = z.string().trim().max(1000);
 // Never own_photo_b64: /state lists every display (GET /displays/:id/photo).
 const DISPLAY_SELECT =
   'id, venue_id, type, model_id, name, code, photo_url, is_new, fabric, colour, leg, seat, ' +
-  'modules, layout, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
+  'modules, layout, accessories, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
   'source_request_id, remarks, dims_width_cm, dims_depth_cm, own_photo_updated_at, created_at, created_by_name';
 
 const cmOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
@@ -207,6 +238,7 @@ const displayToWire = (r: Record<string, unknown>, photoAt: string | null = null
   seat: String(r.seat ?? ''),
   modules: Array.isArray(r.modules) ? (r.modules as unknown[]).map(String) : [],
   layout: layoutToWire(r.layout),
+  accessories: piecesToWire(r.accessories),
   size: String(r.size ?? ''),
   height: String(r.height ?? ''),
   divan: String(r.divan ?? ''),
@@ -243,6 +275,7 @@ const displayFields = z.object({
   seat: short.optional().default(''),
   modules: modules.optional().default([]),
   layout,
+  accessories: sofaPieces,
   size: short.optional().default(''),
   height: short.optional().default(''),
   divan: short.optional().default(''),
@@ -279,17 +312,20 @@ const displayCreateSchema = displayFields.superRefine((v, ctx) => {
 // photo is read one request at a time (GET /requests/:id/photo).
 const REQUEST_SELECT =
   'id, type, status, supplier_code, model, fabric, colour, leg, seat, size, height, divan, gap, ' +
-  'modules, layout, length_cm, width_cm, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
+  'modules, layout, accessories, length_cm, width_cm, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
   'combo_rows, venue_id, action, replace_display_id, requested_by_name, requested_by_role, created_at, updated_at';
 
-type ComboRow = { modules: string[]; price: number | null; layout: LayoutCell[] | null };
+type ComboRow = { modules: string[]; price: number | null; layout: LayoutCell[] | null; accessories: SofaPiece[] | null };
 
 const rowsToWire = (raw: unknown): ComboRow[] =>
   Array.isArray(raw)
     ? raw.map((x) => {
-        const o = (x ?? {}) as { modules?: unknown; price?: unknown; layout?: unknown };
+        const o = (x ?? {}) as { modules?: unknown; price?: unknown; layout?: unknown; accessories?: unknown };
         const price = typeof o.price === 'number' && Number.isFinite(o.price) ? o.price : null;
-        return { modules: Array.isArray(o.modules) ? o.modules.map(String) : [], price, layout: layoutToWire(o.layout) };
+        return {
+          modules: Array.isArray(o.modules) ? o.modules.map(String) : [], price,
+          layout: layoutToWire(o.layout), accessories: piecesToWire(o.accessories),
+        };
       })
     : [];
 
@@ -309,6 +345,7 @@ const requestToWire = (r: Record<string, unknown>) => ({
   gap: String(r.gap ?? ''),
   modules: Array.isArray(r.modules) ? (r.modules as unknown[]).map(String) : [],
   layout: layoutToWire(r.layout),
+  accessories: piecesToWire(r.accessories),
   lengthCm: cmOrNull(r.length_cm),
   widthCm: cmOrNull(r.width_cm),
   sofaCategory: String(r.sofa_category ?? ''),
@@ -334,7 +371,8 @@ const comboRow = z.object({
   price: z.number().min(0).max(10_000_000).nullable(),
   // The combo as laid out on the canvas (0220); null on one saved before it.
   layout,
-});
+  accessories: sofaPieces,
+}).transform((r) => ({ ...r, accessories: piecesOn(r.layout, r.accessories) }));
 
 const requestBodySchema = z.object({
   type: z.enum(['sofa', 'mattress', 'bedframe']),
@@ -352,6 +390,8 @@ const requestBodySchema = z.object({
   modules: modules.optional().default([]),
   // The sofa as laid out on the canvas (0220); `modules` is its left-to-right read.
   layout,
+  // The Sofa Accessory pieces placed on it (0223).
+  accessories: sofaPieces,
   rows: z.array(comboRow).max(30).optional().default([]),
   // Sofa only (0219). Required to save a sofa — see saveGaps.
   lengthCm: cm.nullable().optional().default(null),
@@ -450,6 +490,7 @@ const requestColumns = (b: RequestBody) => ({
   gap: b.gap,
   modules: b.modules,
   layout: b.layout,
+  accessories: piecesOn(b.layout, b.accessories),
   length_cm: b.lengthCm,
   width_cm: b.widthCm,
   sofa_category: b.sofaCategory,
@@ -701,6 +742,7 @@ marketing.post('/displays', async (c) => {
       seat: v.seat,
       modules: v.modules,
       layout: isSofa ? v.layout : null,
+      accessories: isSofa ? piecesOn(v.layout, v.accessories) : null,
       size: v.size,
       height: v.height,
       divan: v.divan,
@@ -727,7 +769,7 @@ marketing.post('/displays', async (c) => {
 // function). `ownPhoto: null` takes the photo off.
 const displayEditSchema = displayFields.pick({
   modelId: true, name: true, code: true, photoUrl: true, fabric: true, colour: true, leg: true, seat: true,
-  modules: true, layout: true, size: true, height: true, divan: true, gap: true, qty: true,
+  modules: true, layout: true, accessories: true, size: true, height: true, divan: true, gap: true, qty: true,
   remarks: true, dimsWidthCm: true, dimsDepthCm: true,
 }).partial().extend({
   ownPhoto: imageSchema.nullable().optional(),
@@ -779,9 +821,9 @@ marketing.patch('/displays/:id', async (c) => {
     });
   }
   // The sofa rules of an add need the piece's type, which the edit never changes.
-  if (v.modules !== undefined || v.layout !== undefined) {
+  if (v.modules !== undefined || v.layout !== undefined || v.accessories !== undefined) {
     const { data: cur, error: curErr } = await sb
-      .from('marketing_displays').select('id, type').eq('id', id).is('removed_at', null).maybeSingle();
+      .from('marketing_displays').select('id, type, layout').eq('id', id).is('removed_at', null).maybeSingle();
     if (curErr) return c.json({ error: 'fetch_failed', reason: curErr.message }, 500);
     if (!cur) return c.json({ error: 'not_found', reason: 'This piece is no longer on display.' }, 404);
     const isSofa = (cur as { type?: string }).type === 'sofa';
@@ -789,6 +831,11 @@ marketing.patch('/displays/:id', async (c) => {
       return c.json({ error: 'validation_failed', issues: [{ path: ['modules'], message: 'A sofa needs its components.' }] }, 400);
     }
     if (!isSofa && v.layout !== undefined) cols.layout = null;
+    // Pieces hang on the layout being saved, else on the one already saved (0223).
+    if (v.accessories !== undefined) {
+      const onLayout = v.layout !== undefined ? v.layout : layoutToWire((cur as { layout?: unknown }).layout);
+      cols.accessories = isSofa ? piecesOn(onLayout, v.accessories) : null;
+    }
   }
   const { data, error } = await sb
     .from('marketing_displays')

@@ -17,12 +17,13 @@ import { ImageUp, X } from 'lucide-react';
 import {
   compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
   type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type PreparedImage, type SofaLayout,
+  type SofaPieces,
 } from './marketing-model';
 import {
   allowedOr, coloursOf, fabricsFor, preferred, withValue,
   type MarketingOptions, type ModelOption,
 } from './marketing-options';
-import { preparePhoto, useAddDisplay, useDisplayPhoto, useEditDisplay, type ShowroomOption } from '../../lib/marketing-api';
+import { piecesOut, preparePhoto, useAddDisplay, useDisplayPhoto, useEditDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
@@ -50,6 +51,7 @@ interface AddState {
   modules: string[];
   /** The sofa as laid out on the canvas (0220). */
   layout: SofaLayout | null;
+  accessories?: SofaPieces | null;
   qty: number;
   /** A copy's own product — the one picked while no catalogue Model is. */
   product: CopiedProduct | null;
@@ -91,7 +93,7 @@ export function copiedAdd(opts: MarketingOptions, c: DisplayCopy): AddState {
   const inCatalogue = !!c.modelId && opts.models[c.type].some((m) => m.id === c.modelId);
   return {
     type: c.type, modelId: inCatalogue ? c.modelId! : '', size: c.size, height: c.height, fabric: c.fabric, colour: c.colour,
-    leg: c.leg, seat: c.seat, divan: c.divan, gap: c.gap, modules: c.modules, layout: c.layout, qty: c.qty,
+    leg: c.leg, seat: c.seat, divan: c.divan, gap: c.gap, modules: c.modules, layout: c.layout, accessories: c.accessories, qty: c.qty,
     product: inCatalogue ? null : {
       modelId: c.modelId, name: c.name, code: c.code, photoUrl: c.photoUrl, lengthCm: c.lengthCm, widthCm: c.widthCm,
       sofaCategory: c.sofaCategory, sofaFunction: c.sofaFunction, sourceRequestId: c.sourceRequestId,
@@ -188,7 +190,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
     if (isSofa && !a.modules.length) { setBuilding(true); return; }
     if (!ident) return;
     setErr('');
-    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout }
+    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout, accessories: piecesOut(a.layout, a.accessories) }
       : a.type === 'mattress' ? { size: a.size, height: a.height.trim() }
       : a.type === 'bedframe' ? { size: a.size, fabric: a.fabric, colour: a.colour, leg: a.leg, divan: a.divan, gap: a.gap.trim() }
       : { qty: a.qty };
@@ -271,7 +273,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
                     {a.product && (
                       <button type="button" className={`${s.modelTile} ${product ? s.modelTileOn : ''}`} onClick={() => set({ modelId: '' })}>
                         <span className={`${s.modelTilePhoto} ${s.modelTileArt}`} style={isSofa ? undefined : bg(a.product.photoUrl)}>
-                          {isSofa && <SofaLayoutPreview layout={a.layout} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} pad={4} />}
+                          {isSofa && <SofaLayoutPreview layout={a.layout} pieces={a.accessories} pieceOptions={opts.sofaAccessoryById} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} pad={4} />}
                         </span>
                         <span className={s.modelTileName}>{a.product.name}</span>
                         <span className={s.modelTileSub}>{a.product.sourceRequestId ? 'New product' : 'Not in the catalogue'}</span>
@@ -399,7 +401,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
 
             <div className={s.modalRight}>
               <div className={s.previewPane} style={photo ? { backgroundImage: `url("${photo}")` } : undefined}>
-                {isSofa && <SofaLayoutPreview layout={a.layout} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} dims />}
+                {isSofa && <SofaLayoutPreview layout={a.layout} pieces={a.accessories} pieceOptions={opts.sofaAccessoryById} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} dims />}
               </div>
               <div>
                 <div className={s.previewName}>{preview.name}</div>
@@ -419,8 +421,10 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
         <ComponentBuilder
           context={`${editing ? 'Edit display' : 'Add on display'} · ${showroom.name}`}
           initialLayout={a.layout}
+          initialAccessories={a.accessories}
           initialModules={a.modules}
           pool={opts.sofaPool}
+          poolState={opts.sofaPoolState}
           seats={seatOpts}
           seat={a.seat}
           onSeat={(v) => set({ seat: v })}
@@ -434,7 +438,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
           leg={a.leg}
           onLeg={(v) => set({ leg: v })}
           onCancel={() => setBuilding(false)}
-          onSave={({ layout, modules }) => { set({ modules, layout }); setBuilding(false); }}
+          onSave={({ layout, modules, accessories }) => { set({ modules, layout, accessories }); setBuilding(false); }}
         />
       )}
 

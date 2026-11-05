@@ -26,7 +26,7 @@ describe('Edit display prefill', () => {
   it('picks the catalogue Model and every option the piece was saved with', () => {
     expect(editOf(item({}))).toEqual({
       type: 'bedframe', modelId: 'm1', size: 'King', height: '', fabric: 'Linen', colour: 'Sand', leg: '4"', seat: '',
-      divan: '10"', gap: '4', modules: [], layout: null, qty: 1, product: null,
+      divan: '10"', gap: '4', modules: [], layout: null, accessories: null, qty: 1, product: null,
     });
   });
 
@@ -36,5 +36,11 @@ describe('Edit display prefill', () => {
     expect(a).toMatchObject({ type: 'sofa', modelId: '', modules: ['1S'], layout, seat: '28"' });
     expect(a.product).toMatchObject({ modelId: 'gone', name: 'OLD', code: 'X1', sourceRequestId: 'r1' });
     expect(a.layout).not.toBe(layout);
+  });
+
+  it('brings back the accessory pieces placed on a sofa', () => {
+    const layout: SofaLayout = [{ id: 'c1', moduleId: '1S', x: 0, y: 0, rot: 0 }];
+    const accessories = [{ id: 'p1', modelId: 'acc-back', cellId: 'c1', slot: 0 }];
+    expect(editOf(item({ type: 'sofa', modules: ['1S'], layout, accessories, seat: '28"' })).accessories).toEqual(accessories);
   });
 });

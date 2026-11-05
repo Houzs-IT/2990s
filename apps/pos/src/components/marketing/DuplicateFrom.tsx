@@ -133,7 +133,7 @@ export const DuplicateFrom = ({
       <button key={r.id} type="button" className={s.dupItem} disabled={!!busy} onClick={() => void pick(r.id!, { kind: 'request', request: r })}>
         <span className={s.dupThumb}>
           {r.type === 'sofa' && r.modules.length > 0
-            ? <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
+            ? <SofaLayoutPreview layout={r.layout} pieces={r.accessories} pieceOptions={opts.sofaAccessoryById} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
             : <Icon size={24} strokeWidth={1.75} className={s.icon} />}
         </span>
         <span className={s.dupText}>
@@ -160,7 +160,7 @@ export const DuplicateFrom = ({
     return (
       <button key={d.id} type="button" className={s.dupItem} disabled={!!busy} onClick={() => void pick(d.id, { kind: 'display', item: d })}>
         <span className={s.dupThumb} style={bg(photo)}>
-          {d.type === 'sofa' && <SofaLayoutPreview layout={d.layout} modules={d.modules} depth={seatDepth(d.seat)} art={opts.moduleArt} />}
+          {d.type === 'sofa' && <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={seatDepth(d.seat)} art={opts.moduleArt} />}
           {d.type !== 'sofa' && !photo && <span className={s.dupInitial}>{(d.name || '?').charAt(0).toUpperCase()}</span>}
         </span>
         <span className={s.dupText}>

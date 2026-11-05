@@ -382,12 +382,12 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                     >
                       <div className={s.displayPic} style={bg(photo)}>
                         {it.type === 'sofa' && !shot && (
-                          <SofaLayoutPreview layout={it.layout} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={18} />
+                          <SofaLayoutPreview layout={it.layout} pieces={it.accessories} pieceOptions={opts.sofaAccessoryById} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={18} />
                         )}
                         {shot && (
                           <>
                             <div className={s.picHalf}>
-                              <SofaLayoutPreview layout={it.layout} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={10} />
+                              <SofaLayoutPreview layout={it.layout} pieces={it.accessories} pieceOptions={opts.sofaAccessoryById} modules={it.modules} depth={seatDepth(it.seat)} art={opts.moduleArt} pad={10} />
                             </div>
                             <RequestPhotoTile requestId={shot.requestId} version={shot.version} className={`${s.picHalf} ${s.picHalfPhoto}`} />
                           </>
@@ -440,7 +440,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
             <div className={s.drawerBody}>
               <div className={s.drawerPic} style={bg(photoOf(drawer.it, opts))}>
                 {drawer.it.type === 'sofa' && (
-                  <SofaLayoutPreview layout={drawer.it.layout} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims
+                  <SofaLayoutPreview layout={drawer.it.layout} pieces={drawer.it.accessories} pieceOptions={opts.sofaAccessoryById} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims
                     dimsLabel={drawer.it.dimsWidthCm != null && drawer.it.dimsDepthCm != null ? { w: drawer.it.dimsWidthCm, h: drawer.it.dimsDepthCm } : undefined} />
                 )}
                 {drawer.it.type !== 'sofa' && !photoOf(drawer.it, opts) && <span className={s.drawerInitial}>{initialOf(drawer.it.name)}</span>}

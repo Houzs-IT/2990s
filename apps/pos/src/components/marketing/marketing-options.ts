@@ -26,6 +26,9 @@ import {
   type MfgAllowedOptions, type MfgCatalogApiRow, type SofaCustomizerData,
 } from '../../lib/queries';
 import { useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
+import {
+  DEFAULT_ARM_WIDTH_CM, guessAccessoryRole, readAccessoryOnSofa, readAccessoryPlacement, type SofaAccessoryOption,
+} from '../../lib/sofa-accessories';
 import { sizeName, type DisplayType } from './marketing-model';
 
 export interface ModelOption {
@@ -96,6 +99,26 @@ function modelsFromCatalog(rows: MfgCatalogApiRow[]): Record<DisplayType, ModelO
   return out;
 }
 
+/** Every Sofa Accessory the tablet would put on a sofa (Custom build), read as
+ *  useSofaCustomizer reads a Model's ticked ones (lib/queries.ts): an active
+ *  SKU of an active Model left "On the sofa". All of them, not one Model's
+ *  list — a new product has no Model to narrow it, like the compartment pool. */
+export function sofaAccessoriesFromCatalog(rows: MfgCatalogApiRow[]): SofaAccessoryOption[] {
+  const byModel = new Map<string, SofaAccessoryOption>();
+  for (const r of rows) {
+    const m = r.product_models;
+    if (r.category !== 'FABRIC_ACCESSORY' || !m || m.active === false || r.status !== 'ACTIVE' || r.pos_active === false) continue;
+    if (!readAccessoryOnSofa(m.allowed_options) || byModel.has(m.id)) continue;
+    const placement = readAccessoryPlacement(m.allowed_options);
+    byModel.set(m.id, {
+      modelId: m.id, productId: r.id, code: r.code, name: r.name, priceSen: r.sell_price_sen,
+      role: placement?.role ?? guessAccessoryRole(r.name, r.code),
+      armWidthCm: placement?.armWidthCm ?? DEFAULT_ARM_WIDTH_CM,
+    });
+  }
+  return [...byModel.values()].sort((a, b) => a.code.localeCompare(b.code));
+}
+
 /* ── the hook ───────────────────────────────────────────────────────────── */
 
 export interface MarketingOptions {
@@ -116,15 +139,20 @@ export interface MarketingOptions {
    *  canvas draws the same art. Every active compartment: a new product has
    *  no Model to narrow it. No prices: Marketing lays out, it does not sell. */
   sofaPool: SofaCustomizerData;
+  /** The pool's Sofa Accessories by accessory Model id, so a preview can draw
+   *  the pieces placed on a laid-out sofa. */
+  sofaAccessoryById: ReadonlyMap<string, SofaAccessoryOption>;
+  /** Whether the pool has loaded — the canvas drops placed pieces it has no
+   *  accessory for, so it must not tidy them before the list arrives. */
+  sofaPoolState: 'pending' | 'error' | 'ready';
   /** The art a compartment draws with, for previews of a laid-out sofa: the
    *  pool's Maintenance image, else the bundled module art. */
   moduleArt: (code: string) => string;
 }
 
-// No Sofa Accessories in Marketing's builder: they are sold with a sofa, not
-// laid out as compartments to buy.
-const EMPTY_POOL: Omit<SofaCustomizerData, 'compartments'> = {
-  sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [], accessories: [], accessoriesNeeded: [], modelId: '', modelName: '', modelCode: '',
+// Nothing is "Needed to order" in Marketing's builder: it lays out, it does not sell.
+const EMPTY_POOL: Omit<SofaCustomizerData, 'compartments' | 'accessories'> = {
+  sellingRows: [], sizes: [], legHeights: [], specials: [], fabricIds: [], accessoriesNeeded: [], modelId: '', modelName: '', modelCode: '',
 };
 
 export function useMarketingOptions(): MarketingOptions {
@@ -161,6 +189,7 @@ export function useMarketingOptions(): MarketingOptions {
       };
     });
     const artByCode = new Map(compartments.map((c) => [c.normalizedCode, c.imageUrl] as const));
+    const accessories = sofaAccessoriesFromCatalog(catalog.data ?? []);
     const moduleArt = (code: string) =>
       artByCode.get(normalizeCompartmentCode(code)) ?? `/sofa-modules/${representativeArtCode(code)}.png`;
 
@@ -176,10 +205,12 @@ export function useMarketingOptions(): MarketingOptions {
       mattressSizes: values('mattressSizes').sort(bySizeOrder).map(sizeName),
       bedframeSizes: values('bedframeSizes').sort(bySizeOrder).map(sizeName),
       moduleLabel: (code: string) => meta[code]?.description ?? null,
-      sofaPool: { ...EMPTY_POOL, compartments },
+      sofaPool: { ...EMPTY_POOL, compartments, accessories },
+      sofaAccessoryById: new Map(accessories.map((o) => [o.modelId, o] as const)),
+      sofaPoolState: catalog.isError || maint.isError ? 'error' : catalog.data && maint.data ? 'ready' : 'pending',
       moduleArt,
     };
-  }, [catalog.data, catalog.isLoading, fabrics.data, fabrics.isLoading, colours.data, colours.isLoading, maint.data, maint.isLoading]);
+  }, [catalog.data, catalog.isLoading, catalog.isError, maint.isError, fabrics.data, fabrics.isLoading, colours.data, colours.isLoading, maint.data, maint.isLoading]);
 }
 
 /* ── per-Model narrowing (the Sales Order line's allowed-options rule) ──── */

@@ -18,7 +18,7 @@ import { bearerToken } from './apiClient';
 import { cmOf } from '../components/marketing/marketing-model';
 import type {
   ComboRow, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
-  SofaLayout,
+  SofaLayout, SofaPieces,
 } from '../components/marketing/marketing-model';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -60,17 +60,18 @@ interface WireDisplay {
   photoUrl: string | null; isNew: boolean; fabric: string; colour: string; leg: string; seat: string;
   modules: string[]; size: string; height: string; divan: string; gap: string; qty: number;
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
-  sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null;
+  sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null; accessories?: SofaPieces | null;
   remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhotoAt?: string | null;
 }
 
 interface WireRequest {
   id: string; type: string; status: string; supplierCode: string; model: string; fabric: string;
   colour: string; leg: string; seat: string; size: string; height: string; divan: string; gap: string;
-  modules: string[]; rows: Array<{ modules: string[]; price: number | null; layout?: SofaLayout | null }>; venueId: string;
+  modules: string[]; rows: Array<{ modules: string[]; price: number | null; layout?: SofaLayout | null; accessories?: SofaPieces | null }>; venueId: string;
   action: string; replaceId: string | null; by: string; byRole: string; createdAt: string;
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   photoMatch?: string; photoNote?: string; photoAt?: string | null; layout?: SofaLayout | null;
+  accessories?: SofaPieces | null;
 }
 
 export interface FloorplanMeta { venueId: string; updatedAt: string; fileName: string }
@@ -100,18 +101,18 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   modules: w.modules ?? [], size: w.size, height: w.height, divan: w.divan, gap: w.gap, qty: w.qty || 1,
   lengthCm: w.lengthCm ?? null, widthCm: w.widthCm ?? null, sofaCategory: w.sofaCategory ?? '',
   sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, photoAt: w.photoAt ?? null,
-  layout: w.layout ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
+  layout: w.layout ?? null, accessories: w.accessories ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
   dimsDepthCm: w.dimsDepthCm ?? null, ownPhotoAt: w.ownPhotoAt ?? null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
   id: w.id, type: w.type as RequestType, status: w.status as RequestStatus, supplierCode: w.supplierCode,
   model: w.model, fabric: w.fabric, colour: w.colour, leg: w.leg, seat: w.seat, size: w.size, height: w.height,
-  divan: w.divan, gap: w.gap, modules: w.modules ?? [], layout: w.layout ?? null,
+  divan: w.divan, gap: w.gap, modules: w.modules ?? [], layout: w.layout ?? null, accessories: w.accessories ?? null,
   lengthCm: w.lengthCm == null ? '' : String(w.lengthCm), widthCm: w.widthCm == null ? '' : String(w.widthCm),
   sofaCategory: w.sofaCategory ?? '', sofaFunction: w.sofaFunction ?? '',
   photoAt: w.photoAt ?? null, photoUpload: null, photoMatch: asMatch(w.photoMatch), photoNote: w.photoNote ?? '',
-  rows: (w.rows ?? []).map((r) => ({ modules: r.modules ?? [], price: r.price == null ? '' : String(r.price), layout: r.layout ?? null })),
+  rows: (w.rows ?? []).map((r) => ({ modules: r.modules ?? [], price: r.price == null ? '' : String(r.price), layout: r.layout ?? null, accessories: r.accessories ?? null })),
   showroomId: w.venueId, action: w.action as RequestAction, replaceId: w.replaceId, by: w.by, byRole: w.byRole,
   created: w.createdAt,
 });
@@ -124,16 +125,21 @@ const priceOut = (r: ComboRow): number | null => {
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
+/** Pieces travel only with the layout they hang on; none = null. */
+export const piecesOut = (layout: SofaLayout | null | undefined, p: SofaPieces | null | undefined): SofaPieces | null =>
+  (layout?.length && p?.length ? p : null);
+
 const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   type: d.type, status, supplierCode: d.supplierCode, model: d.model, fabric: d.fabric, colour: d.colour,
   leg: d.leg, seat: d.seat, size: d.size, height: d.height, divan: d.divan, gap: d.gap, modules: d.modules,
   layout: d.layout && d.layout.length ? d.layout : null,
+  accessories: piecesOut(d.layout, d.accessories),
   lengthCm: cmOf(d.lengthCm), widthCm: cmOf(d.widthCm), sofaCategory: d.sofaCategory, sofaFunction: d.sofaFunction,
   photoMatch: d.photoMatch, photoNote: d.photoMatch === 'non_exact' ? d.photoNote.trim() : '',
   // Only a newly picked photo travels; leaving it out keeps the saved one. A
   // sofa's only — a mattress or bed frame form has no photo.
   ...(d.type === 'sofa' && d.photoUpload ? { photo: d.photoUpload } : {}),
-  rows: d.rows.map((r) => ({ modules: r.modules, price: priceOut(r), layout: r.layout && r.layout.length ? r.layout : null })),
+  rows: d.rows.map((r) => ({ modules: r.modules, price: priceOut(r), layout: r.layout && r.layout.length ? r.layout : null, accessories: piecesOut(r.layout, r.accessories) })),
   venueId: d.showroomId, action: d.action, replaceId: d.action === 'replace' ? d.replaceId : null,
 });
 
@@ -250,6 +256,7 @@ export function useRemoveShowroom() {
 export interface NewDisplay {
   venueId: string; type: DisplayType; modelId: string | null; name: string; code: string; photoUrl: string | null;
   fabric?: string; colour?: string; leg?: string; seat?: string; modules?: string[]; layout?: SofaLayout | null;
+  accessories?: SofaPieces | null;
   size?: string; height?: string; divan?: string; gap?: string; qty?: number;
   /** A copy of a new product (Duplicate): what Arrive would have carried, and
    *  the launch request it came from. */

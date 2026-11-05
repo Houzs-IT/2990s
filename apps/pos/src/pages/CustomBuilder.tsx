@@ -513,10 +513,11 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
 
   /* ─── Sofa Accessories (owner 2026-10-16, lib/sofa-accessories.ts) ──
      Pieces that attach to the modules — back cushion, back support, extra arm
-     — offered by this Model (Modular › Sofa accessories). Selling only: not in
-     Marketing's layout, and not in a TBC exchange or an add to a placed order,
-     which hand ONE sofa line to a callback with nowhere for accessory lines. */
-  const accessoriesOn = !layoutOnly && !onSwapConfirm && !onAddToOrderConfirm;
+     — offered by this Model (Modular › Sofa accessories). Not in a TBC
+     exchange or an add to a placed order, which hand ONE sofa line to a
+     callback with nowhere for accessory lines. Marketing's layout places them
+     too (2026-11-05: "not aligned with pos portal"), without their prices. */
+  const accessoriesOn = !onSwapConfirm && !onAddToOrderConfirm;
   const accessoryOptions = useMemo<SofaAccessoryOption[]>(
     () => (accessoriesOn ? modelCustomizer?.accessories ?? [] : []),
     [accessoriesOn, modelCustomizer],
@@ -549,11 +550,12 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
   }, [accessories, onAccessoriesChange]);
   // Keep pieces in step with the modules — a module removed, turned against
   // another, or an accessory switched off for this Model. Waits for the Model's
-  // data, and for a drag to end (draft positions are transient).
+  // data (not just the object: Marketing's pool exists before its accessory
+  // list loads), and for a drag to end (draft positions are transient).
   useEffect(() => {
-    if (draftDelta || !modelCustomizer) return;
+    if (draftDelta || !modelCustomizer || modelCustomizerState !== 'ready') return;
     setAccessories((prev) => pruneAccessories(prev, cells, accessoryById, depth));
-  }, [cells, accessoryById, depth, draftDelta, modelCustomizer]);
+  }, [cells, accessoryById, depth, draftDelta, modelCustomizer, modelCustomizerState]);
 
 
   /* ─── Module-add (palette → canvas) ─────────────────────────────── */
@@ -1576,7 +1578,8 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
             <div className={styles.paletteGroup}>
               <div className={styles.paletteGroupHead}>Sofa accessories</div>
               {accessoryOptions.map((o) => {
-                const priced = isPriced(o);
+                // Marketing lays a sofa out to buy it: a missing selling price stops nothing there.
+                const priced = !!layoutOnly || isPriced(o);
                 return (
                   <button
                     key={o.modelId}
@@ -1593,7 +1596,7 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
                     <div className={styles.paletteInfo}>
                       <div className={styles.paletteCode}>{o.code}</div>
                       <div className={styles.paletteSub}>{SOFA_ACCESSORY_ROLE_LABEL[o.role]}</div>
-                      <div className={styles.palettePrice}>{priced ? fmtAccessoryPrice(o.priceSen as number) : 'Price not set'}</div>
+                      {!layoutOnly && <div className={styles.palettePrice}>{priced ? fmtAccessoryPrice(o.priceSen as number) : 'Price not set'}</div>}
                     </div>
                     <span className={styles.paletteAdd} aria-hidden>+</span>
                   </button>
@@ -2224,15 +2227,18 @@ export const CustomBuilder = ({ toolbarTarget, productId, productName, pricing, 
                 {isSel && !drag && (
                   <div className={styles.accessoryTools} onPointerDown={(e) => e.stopPropagation()}>
                     <span className={styles.groupToolsLabel}>{o.code}</span>
-                    <button
-                      type="button"
-                      className={styles.accessoryToolBtn}
-                      onClick={() => setAccessoryColourFor(piece.id)}
-                      title="Colour"
-                      aria-label={`Colour of ${o.name}`}
-                    >
-                      <Palette size={12} strokeWidth={2} />
-                    </button>
+                    {/* Marketing's colour is the form's, for the whole sofa. */}
+                    {!layoutOnly && (
+                      <button
+                        type="button"
+                        className={styles.accessoryToolBtn}
+                        onClick={() => setAccessoryColourFor(piece.id)}
+                        title="Colour"
+                        aria-label={`Colour of ${o.name}`}
+                      >
+                        <Palette size={12} strokeWidth={2} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={styles.groupToolsBtn}

@@ -22,7 +22,7 @@ import { orderSofaCellsLeftToRight, type Cell, type SofaProductPricing } from '@
 import { CustomBuilder, centerCellsInRoom } from '../../pages/CustomBuilder';
 import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
 import type { SofaCustomizerData } from '../../lib/queries';
-import { seatDepth, type SofaLayout } from './marketing-model';
+import { seatDepth, type SofaLayout, type SofaPieces } from './marketing-model';
 import s from './marketing.module.css';
 
 /** A sofa being bought, not sold: nothing on the canvas carries a price. */
@@ -34,18 +34,22 @@ const newId = (): string =>
     ? crypto.randomUUID()
     : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-/** What Save components hands back: the layout, and its left-to-right read
- *  (the order the POS's own labels and Quick Picks use). */
-export interface BuiltSofa { layout: SofaLayout; modules: string[] }
+/** What Save components hands back: the layout, its left-to-right read (the
+ *  order the POS's own labels and Quick Picks use), and the Sofa Accessory
+ *  pieces placed on it (null when none). */
+export interface BuiltSofa { layout: SofaLayout; modules: string[]; accessories: SofaPieces | null }
 
 export interface BuilderProps {
   context: string;
   /** The layout saved last time. */
   initialLayout: SofaLayout | null | undefined;
+  /** The pieces saved on that layout (they hang on its cell ids). */
+  initialAccessories?: SofaPieces | null;
   /** A record saved before the canvas has only its module list. */
   initialModules: readonly string[];
   /** The master compartment pool, as the canvas's palette takes it. */
   pool: SofaCustomizerData;
+  poolState: 'pending' | 'error' | 'ready';
   seats: string[];
   seat: string;
   onSeat: (v: string) => void;
@@ -73,6 +77,9 @@ function startCells(layout: SofaLayout | null | undefined, modules: readonly str
 export const ComponentBuilder = (p: BuilderProps) => {
   const depth = seatDepth(p.seat);
   const [cells, setCells] = useState<Cell[]>(() => startCells(p.initialLayout, p.initialModules, depth));
+  // Pieces only mean something on the saved layout's cell ids.
+  const [initialPieces] = useState(() => (p.initialLayout?.length ? p.initialAccessories ?? undefined : undefined));
+  const [pieces, setPieces] = useState<SofaPieces>(() => initialPieces ?? []);
 
   const save = () => {
     if (!cells.length) return;
@@ -80,6 +87,7 @@ export const ComponentBuilder = (p: BuilderProps) => {
       // Positions exactly as the canvas holds them — the snap made them flush.
       layout: cells.map((c) => ({ id: c.id, moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot })),
       modules: orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId),
+      accessories: pieces.length ? pieces.map(({ id, modelId, cellId, slot }) => ({ id, modelId, cellId, slot })) : null,
     });
   };
 
@@ -160,6 +168,9 @@ export const ComponentBuilder = (p: BuilderProps) => {
           setCells={setCells}
           onAdded={noop}
           modelCustomizer={p.pool}
+          modelCustomizerState={p.poolState}
+          initialAccessories={initialPieces}
+          onAccessoriesChange={setPieces}
         />
       </div>
     </div>,

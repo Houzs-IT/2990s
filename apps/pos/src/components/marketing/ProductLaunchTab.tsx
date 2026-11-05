@@ -91,7 +91,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
           <div className={s.reqThumbs}>
             <div className={s.reqThumb}>
               {r.type === 'sofa' && r.modules.length > 0
-                ? <SofaLayoutPreview layout={r.layout} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
+                ? <SofaLayoutPreview layout={r.layout} pieces={r.accessories} pieceOptions={opts.sofaAccessoryById} modules={r.modules} depth={seatDepth(r.seat)} art={opts.moduleArt} />
                 : <Icon size={26} strokeWidth={1.75} className={s.icon} />}
             </div>
             {/* The photo it was filed with, beside the layout (owner 2026-10-10). */}

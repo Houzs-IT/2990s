@@ -9,14 +9,19 @@
 import { useMemo, type CSSProperties } from 'react';
 import { SofaCellsPreview } from '../SofaCellsPreview';
 import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
-import type { SofaLayout } from './marketing-model';
+import type { SofaAccessoryOption } from '../../lib/sofa-accessories';
+import type { SofaLayout, SofaPieces } from './marketing-model';
 import s from './marketing.module.css';
 
 /** Room for the W × D dimension lines SofaCellsPreview draws outside the sofa. */
 const DIMS_PADDING: CSSProperties = { padding: '42px 46px 8px 8px' };
 
-export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, dimsLabel, pad = 4 }: {
+export const SofaLayoutPreview = ({ layout, pieces, pieceOptions, modules, depth, art, dims = false, dimsLabel, pad = 4 }: {
   layout: SofaLayout | null | undefined;
+  /** Sofa Accessory pieces on that layout, drawn as the canvas draws them
+   *  (needs the layout: they hang on its cells). */
+  pieces?: SofaPieces | null;
+  pieceOptions?: ReadonlyMap<string, SofaAccessoryOption>;
   modules: readonly string[];
   /** Seat depth the modules are measured at — seatDepth(seat). */
   depth: string;
@@ -35,7 +40,8 @@ export const SofaLayoutPreview = ({ layout, modules, depth, art, dims = false, d
   return (
     <div className={s.layoutBox} style={dims ? DIMS_PADDING : { padding: pad }}>
       <div className={s.layoutFit}>
-        <SofaCellsPreview cells={cells} depth={depth} artSrc={art} showDims={dims} dimsLabel={dimsLabel} tileBundles={false} />
+        <SofaCellsPreview cells={cells} depth={depth} artSrc={art} showDims={dims} dimsLabel={dimsLabel} tileBundles={false}
+          accessories={layout?.length ? pieces ?? undefined : undefined} accessoryOptions={pieceOptions} />
       </div>
     </div>
   );

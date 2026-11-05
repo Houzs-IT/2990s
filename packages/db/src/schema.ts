@@ -3262,6 +3262,9 @@ export const marketingDisplays = pgTable('marketing_displays', {
   // [{ id, moduleId, x, y, rot }] as laid out on the Custom build canvas (0220);
   // null on a piece recorded before it. Carried from the request by Arrive.
   layout:          jsonb('layout'),
+  // [{ id, modelId, cellId, slot }] Sofa Accessory pieces placed on that layout
+  // (0223); null when none. Carried from the request by Arrive.
+  accessories:     jsonb('accessories'),
   size:            text('size').notNull().default(''),
   height:          text('height').notNull().default(''),
   divan:           text('divan').notNull().default(''),
@@ -3330,6 +3333,8 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   // [{ id, moduleId, x, y, rot }] as laid out on the Custom build canvas (0220);
   // `modules` is its left-to-right read. null on a request saved before it.
   layout:           jsonb('layout'),
+  // [{ id, modelId, cellId, slot }] Sofa Accessory pieces on that layout (0223).
+  accessories:      jsonb('accessories'),
   // Sofa only (0219). Saving a sofa needs all of them (the API checks); the
   // columns stay nullable / '' so requests saved before 0219 still load.
   lengthCm:         integer('length_cm'),
