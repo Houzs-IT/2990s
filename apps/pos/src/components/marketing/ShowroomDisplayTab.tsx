@@ -11,7 +11,7 @@ import {
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
 import {
-  prepareFloorplan, useDeleteFloorplan, useDisplayPhoto, useEditDisplay, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type MarketingState,
+  prepareFloorplan, preparePhoto, useDeleteFloorplan, useDisplayPhoto, useEditDisplay, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type DisplayEdit, type MarketingState,
 } from '../../lib/marketing-api';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
 import { RequestPhotoTile } from './RequestPhotoTile';
@@ -46,9 +46,10 @@ const RequestPhoto = ({ requestId, version }: { requestId: string; version: stri
   );
 };
 
-/** What Marketing keeps on a piece (2990-0021): the photo attached when it was
- *  added, its remarks, and — on a sofa — the W × D printed on its diagram.
- *  Saved on this display only; the product's own size is never touched. */
+/** What Marketing keeps on a piece (2990-0021): its own photo (attached,
+ *  replaced or removed here too — YH 2026-11-05), its remarks, and — on a sofa —
+ *  the W × D printed on its diagram. Saved on this display only; the product's
+ *  own size is never touched. */
 const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => void }) => {
   const photo = useDisplayPhoto(it.id, it.ownPhotoAt).data;
   const edit = useEditDisplay();
@@ -59,16 +60,50 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
   const blank = !w.trim() && !d.trim();
   const problem = diagramSizeProblem(w, d);
   const dimsOk = !problem;
-  const save = (p: { remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null }, done: string) =>
+  const save = (p: DisplayEdit, done: string) =>
     edit.mutate({ id: it.id, ...p }, { onSuccess: () => toast(done), onError: (e) => toast((e as Error).message) });
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setPhotoBusy(true);
+    try {
+      save({ ownPhoto: await preparePhoto(f) }, 'Photo saved');
+    } catch (x) {
+      toast(`Photo not saved — ${(x as Error).message}`);
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+  const busy = photoBusy || edit.isPending;
   return (
     <>
-      {it.ownPhotoAt && photo && (
-        <div className={s.compsBlock}>
-          <div className={s.compsTitle}>Photo</div>
-          <img src={photo} alt={`${it.name} photo`} className={s.refPhotoImg} />
-        </div>
-      )}
+      <div className={s.compsBlock}>
+        <div className={s.compsTitle}>Photo</div>
+        {it.ownPhotoAt ? (
+          <>
+            {photo && <img src={photo} alt={`${it.name} photo`} className={s.refPhotoImg} />}
+            <div className={s.planCardActions}>
+              <label className={s.planReplace}>
+                <Upload size={13} strokeWidth={1.75} className={s.icon} />Replace
+                <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={busy} onChange={(e) => void onPhotoFile(e)} />
+              </label>
+              <button type="button" className={s.planRemove} disabled={busy} onClick={() => save({ ownPhoto: null }, 'Photo removed')}>Remove</button>
+            </div>
+          </>
+        ) : (
+          <label className={s.planStrip}>
+            <span className={s.planStripIcon}><ImageUp size={20} strokeWidth={1.75} className={s.icon} /></span>
+            <span className={s.planStripText}>
+              <span className={s.planStripTitle}>{busy ? 'Saving the photo…' : 'Attach a photo'}</span>
+              <span className={s.planStripSub}>JPG or PNG</span>
+            </span>
+            <span className={s.planStripPill}>Upload</span>
+            <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={busy} onChange={(e) => void onPhotoFile(e)} />
+          </label>
+        )}
+      </div>
       <div className={s.compsBlock}>
         <div className={s.compsTitle}>Remarks</div>
         <textarea
@@ -111,6 +146,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   /** The showroom dialog: 'add', or the id of the showroom being edited. */
   const [srDialog, setSrDialog] = useState<'add' | string | null>(null);
 
@@ -134,6 +170,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
   };
   const drawer = findItem(drawerId);
   const confirm = findItem(confirmId);
+  const editItem = findItem(editId);
 
   const onPlanFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -417,7 +454,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                   <div key={row.k} className={s.kvRow}><span className={s.kvKey}>{row.k}</span><span className={s.kvVal}>{row.v}</span></div>
                 ))}
               </div>
-              <DisplayExtras key={drawer.it.id} it={drawer.it} toast={toast} />
+              <DisplayExtras key={`${drawer.it.id}|${drawer.it.remarks}|${drawer.it.dimsWidthCm}|${drawer.it.dimsDepthCm}`} it={drawer.it} toast={toast} />
               {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && drawer.it.photoAt && (
                 <RequestPhoto requestId={drawer.it.sourceRequestId} version={drawer.it.photoAt} />
               )}
@@ -439,6 +476,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
               )}
             </div>
             <div className={s.drawerFoot}>
+              <button type="button" className={`${s.ghostBtn} ${s.srEditBtn}`} onClick={() => setEditId(drawer.it.id)}>
+                <Pencil size={15} strokeWidth={1.75} className={s.icon} />Edit
+              </button>
               <button type="button" className={s.removeOutline} onClick={() => setConfirmId(drawer.it.id)}>
                 <Trash2 size={15} strokeWidth={1.75} className={s.icon} />Remove from display
               </button>
@@ -471,6 +511,20 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
           showrooms={showrooms}
           onClose={() => setAddOpen(false)}
           onAdded={(name) => { setAddOpen(false); toast(`${name} added to ${showroom.name}`); }}
+        />
+      )}
+
+      {editItem && (
+        <AddDisplayModal
+          key={editItem.it.id}
+          showroom={editItem.s}
+          opts={opts}
+          displays={state.displays}
+          requests={state.requests}
+          showrooms={showrooms}
+          editing={editItem.it}
+          onClose={() => setEditId(null)}
+          onAdded={(name) => { setEditId(null); toast(`${name} saved`); }}
         />
       )}
 
