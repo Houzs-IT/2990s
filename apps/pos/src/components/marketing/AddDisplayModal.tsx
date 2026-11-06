@@ -35,7 +35,7 @@ import s from './marketing.module.css';
  *  and what Arrive carries with a new product. */
 type CopiedProduct = Pick<
   DisplayCopy,
-  'modelId' | 'name' | 'code' | 'photoUrl' | 'lengthCm' | 'widthCm' | 'lengthParts' | 'lengthShowParts' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId'
+  'modelId' | 'name' | 'code' | 'photoUrl' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId'
 >;
 
 interface AddState {
@@ -97,7 +97,6 @@ export function copiedAdd(opts: MarketingOptions, c: DisplayCopy): AddState {
     leg: c.leg, seat: c.seat, divan: c.divan, gap: c.gap, modules: c.modules, layout: c.layout, accessories: c.accessories, qty: c.qty,
     product: inCatalogue ? null : {
       modelId: c.modelId, name: c.name, code: c.code, photoUrl: c.photoUrl, lengthCm: c.lengthCm, widthCm: c.widthCm,
-      lengthParts: c.lengthParts, lengthShowParts: c.lengthShowParts,
       sofaCategory: c.sofaCategory, sofaFunction: c.sofaFunction, sourceRequestId: c.sourceRequestId,
     },
   };
@@ -200,7 +199,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
     // its size, category and function.
     const carried = product ? {
       sourceRequestId: product.sourceRequestId,
-      ...(isSofa ? { lengthCm: product.lengthCm, widthCm: product.widthCm, lengthParts: product.lengthParts, lengthShowParts: product.lengthShowParts, sofaCategory: product.sofaCategory, sofaFunction: product.sofaFunction } : {}),
+      ...(isSofa ? { lengthCm: product.lengthCm, widthCm: product.widthCm, sofaCategory: product.sofaCategory, sofaFunction: product.sofaFunction } : {}),
     } : {};
     try {
       if (editing) {

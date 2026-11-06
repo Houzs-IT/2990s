@@ -523,7 +523,8 @@ const requestColumns = (b: RequestBody) => ({
   length_cm: b.lengthCm,
   width_cm: b.widthCm,
   length_parts: b.type === 'sofa' ? b.lengthParts : null,
-  length_show_parts: b.type === 'sofa' && b.lengthParts != null && b.lengthShowParts,
+  // Parts are worked out from the layout now (YH 2026-11-06); this only says how to print them.
+  length_show_parts: b.type === 'sofa' && b.lengthShowParts,
   sofa_category: b.sofaCategory,
   sofa_function: b.sofaFunction,
   photo_match: b.photoMatch,
@@ -753,7 +754,7 @@ marketing.post('/displays', async (c) => {
       dims_width_cm: isSofa ? v.dimsWidthCm : null,
       dims_depth_cm: isSofa ? v.dimsDepthCm : null,
       length_parts: isSofa ? v.lengthParts : null,
-      length_show_parts: isSofa && v.lengthParts != null && v.lengthShowParts,
+      length_show_parts: isSofa && v.lengthShowParts,
       ...(own?.ok ? {
         own_photo_content_type: own.cols.photo_content_type,
         own_photo_b64: own.cols.photo_b64,

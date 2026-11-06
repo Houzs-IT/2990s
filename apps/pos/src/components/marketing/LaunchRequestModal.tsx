@@ -25,7 +25,7 @@ import {
 import { ComponentBuilder, type BuiltSofa } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
-import { LengthPartsInput, ShowPartsChoice } from './LengthPartsInput';
+import { ShowPartsChoice } from './ShowPartsChoice';
 import s from './marketing.module.css';
 
 type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
@@ -308,11 +308,11 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
               {isSofa && (
                 <div className={`${s.field} ${s.fieldSize}`}>
                   <span className={s.fieldLabel}>Sofa size · length × width<Req on={sizeMissing} /></span>
-                  <span className={`${s.inchRow} ${s.inchRowWrap}`}>
-                    <LengthPartsInput
-                      value={d.lengthCm} parts={d.lengthParts ?? null} label="Length" placeholder="Length"
-                      inputClass={`${s.input} ${s.inputBold} ${s.inchInput}`}
-                      onChange={(v) => patch({ lengthCm: v.value, lengthParts: v.parts })}
+                  <span className={s.inchRow}>
+                    <input
+                      type="number" inputMode="numeric" min={1} max={1000} step={1} value={d.lengthCm} placeholder="Length"
+                      aria-label="Length in cm" className={`${s.input} ${s.inputBold} ${s.inchInput}`}
+                      onChange={(e) => patch({ lengthCm: e.target.value })}
                     />
                     <span className={s.inchUnit}>×</span>
                     <input
@@ -322,7 +322,6 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     />
                     <span className={s.inchUnit}>cm</span>
                   </span>
-                  {d.lengthParts && <ShowPartsChoice show={!!d.lengthShowParts} onChange={(v) => patch({ lengthShowParts: v })} />}
                 </div>
               )}
 
@@ -549,9 +548,10 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
               {isSofa && (
                 <>
                   <div className={s.previewPlain}>
-                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} dims />
+                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} dims showParts={!!d.lengthShowParts} />
                   </div>
                   <div className={s.previewShape}>{shapeName(d.modules)}</div>
+                  {!!d.layout?.length && <ShowPartsChoice show={!!d.lengthShowParts} onChange={(v) => patch({ lengthShowParts: v })} />}
                 </>
               )}
               <div className={s.field}>

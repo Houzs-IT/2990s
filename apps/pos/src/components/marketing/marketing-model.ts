@@ -80,10 +80,7 @@ export interface DisplayItem {
    *  size computed from the layout. Never the product's own size. */
   dimsWidthCm: number | null;
   dimsDepthCm: number | null;
-  /** The length typed as parts, x + y (0224). They add up to the length this
-   *  piece shows: dimsWidthCm when set, else lengthCm. Absent / null = one number. */
-  lengthParts?: number[] | null;
-  /** Print "120 + 100 = 220" instead of "220". */
+  /** Write the diagram's length and depth as its components' parts, x + y. */
   lengthShowParts?: boolean;
   /** Version of the photo attached when it was added; null when none. */
   ownPhotoAt: string | null;
@@ -145,9 +142,7 @@ export interface LaunchRequest {
   /** Length × width in cm, the raw input text — '' until typed. */
   lengthCm: string;
   widthCm: string;
-  /** lengthCm typed as parts, the raw input text (0224); lengthCm is kept at
-   *  their sum. Absent / null = typed as one number. */
-  lengthParts?: string[] | null;
+  /** Write the diagram's length and depth as its components' parts, x + y. */
   lengthShowParts?: boolean;
   /** Names from Marketing's own lists (Maintenance), as saved. */
   sofaCategory: string;
@@ -184,52 +179,11 @@ export function cmOf(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) && n >= 1 && n <= 1000 ? n : null;
 }
 
-/* ── a length typed as parts (0224, YH 2026-11-05) ─────────────────────────── */
-
-/** At most this many parts to a length (the API's limit). */
-export const MAX_LENGTH_PARTS = 6;
-
-type Parts = readonly (string | number)[] | null | undefined;
-
-/** The parts' sum in whole cm, or null while one is blank or not a usable size. */
-export function partsTotal(parts: Parts): number | null {
-  if (!parts?.length) return null;
-  const cms = parts.map(cmOf);
-  if (cms.some((x) => x == null)) return null;
-  const sum = (cms as number[]).reduce((a, x) => a + x, 0);
-  return sum <= 1000 ? sum : null;
-}
-
-/** Parts as the API takes them: 2 or more usable sizes, else null. */
-export const partsOut = (parts: Parts): number[] | null =>
-  parts && parts.length >= 2 && partsTotal(parts) != null ? parts.map((x) => cmOf(x)!) : null;
-
-/** The parts, only when they add up to this length — a piece's parts describe
- *  one of its lengths (the diagram width, else the product length). */
-export const partsFor = (parts: Parts, length: string | number | null | undefined): number[] | null => {
-  const p = partsOut(parts);
+/** '220 × 95 cm', or '' while either side is missing. */
+export const sizeText = (length: string | number | null | undefined, width: string | number | null | undefined): string => {
   const l = cmOf(length);
-  return p && l != null && partsTotal(p) === l ? p : null;
-};
-
-/** '120 + 100 = 220' when the parts add up to it and are to be shown, else
- *  '220'; '' while there is no length. No unit. */
-export function lengthText(length: string | number | null | undefined, parts?: Parts, show?: boolean): string {
-  const l = cmOf(length);
-  if (l == null) return '';
-  const p = show ? partsFor(parts, l) : null;
-  return p ? `${p.join(' + ')} = ${l}` : String(l);
-}
-
-/** '220 × 95 cm' — '(120 + 100 = 220) × 95 cm' when the length's parts are
- *  shown — or '' while either side is missing. */
-export const sizeText = (
-  length: string | number | null | undefined, width: string | number | null | undefined, parts?: Parts, show?: boolean,
-): string => {
-  const l = lengthText(length, parts, show);
   const w = cmOf(width);
-  if (!l || !w) return '';
-  return `${l.includes('+') ? `(${l})` : l} × ${w} cm`;
+  return l && w ? `${l} × ${w} cm` : '';
 };
 
 /** A saved photo, or one picked in the form and not saved yet. */
@@ -364,7 +318,7 @@ export function tagsOf(it: SpecFields): string[] {
   return t;
 }
 
-type DetailFields = SpecFields & Partial<Pick<DisplayItem, 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'lengthParts' | 'lengthShowParts'>>;
+type DetailFields = SpecFields & Partial<Pick<DisplayItem, 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction'>>;
 
 export function detailRows(it: DetailFields): Array<{ k: string; v: string }> {
   const v = (x: string) => x || '—';
@@ -375,7 +329,7 @@ export function detailRows(it: DetailFields): Array<{ k: string; v: string }> {
     ];
     // Carried from a launch request by Arrive (0219); a piece recorded by hand
     // never had them, so their rows only appear when there is something to say.
-    const size = sizeText(it.lengthCm, it.widthCm, it.lengthParts, it.lengthShowParts);
+    const size = sizeText(it.lengthCm, it.widthCm);
     if (size) rows.push({ k: 'Size', v: size });
     if (it.sofaCategory) rows.push({ k: 'Category', v: it.sofaCategory });
     if (it.sofaFunction) rows.push({ k: 'Function', v: it.sofaFunction });
@@ -467,11 +421,6 @@ export type DuplicateSource =
 const copyLayout = (l: SofaLayout | null | undefined): SofaLayout | null => (l ? l.map((c) => ({ ...c })) : null);
 const copyPieces = (p: SofaPieces | null | undefined): SofaPieces | null => (p?.length ? p.map((x) => ({ ...x })) : null);
 const cmText = (n: number | null): string => (n == null ? '' : String(n));
-/** A copy takes the parts only when they make up the length it takes. */
-function copiedParts<T>(parts: Parts, show: boolean | undefined, length: string | number | null, as: (n: number) => T) {
-  const p = partsFor(parts, length);
-  return { lengthParts: p ? p.map(as) : null, lengthShowParts: !!(p && show) };
-}
 
 /** The fields a launch request form takes from a source. The photo is not
  *  among them: it is read on its own (it is not on the wire), then sent again
@@ -482,8 +431,7 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
     return {
       type: r.type, supplierCode: r.supplierCode, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
       seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules],
-      layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), lengthCm: r.lengthCm, widthCm: r.widthCm,
-      lengthParts: r.lengthParts ? [...r.lengthParts] : null, lengthShowParts: !!r.lengthShowParts,
+      layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), lengthCm: r.lengthCm, widthCm: r.widthCm, lengthShowParts: !!r.lengthShowParts,
       sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
       rows: r.rows.map((x) => ({ modules: [...x.modules], price: x.price, layout: copyLayout(x.layout), accessories: copyPieces(x.accessories) })),
     };
@@ -496,9 +444,9 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
     accessories: copyPieces(x.accessories),
     // A piece from the launch board carries what its request said (Arrive
     // copied it); a catalogue piece never had these.
+    lengthShowParts: !!x.lengthShowParts,
     ...(x.sourceRequestId ? {
       supplierCode: x.code, lengthCm: cmText(x.lengthCm), widthCm: cmText(x.widthCm),
-      ...copiedParts(x.lengthParts, x.lengthShowParts, x.lengthCm, String),
       sofaCategory: x.sofaCategory, sofaFunction: x.sofaFunction,
     } : {}),
   };
@@ -539,8 +487,6 @@ export interface DisplayCopy {
   qty: number;
   lengthCm: number | null;
   widthCm: number | null;
-  lengthParts: number[] | null;
-  lengthShowParts: boolean;
   sofaCategory: string;
   sofaFunction: string;
   sourceRequestId: string | null;
@@ -553,7 +499,6 @@ export function displayCopyFrom(src: DuplicateSource): DisplayCopy {
       type: x.type, modelId: x.modelId, name: x.name, code: x.code, photoUrl: x.photoUrl, fabric: x.fabric,
       colour: x.colour, leg: x.leg, seat: x.seat, size: x.size, height: x.height, divan: x.divan, gap: x.gap,
       modules: [...x.modules], layout: copyLayout(x.layout), accessories: copyPieces(x.accessories), qty: x.qty || 1, lengthCm: x.lengthCm, widthCm: x.widthCm,
-      ...copiedParts(x.lengthParts, x.lengthShowParts, x.lengthCm, (n) => n),
       sofaCategory: x.sofaCategory, sofaFunction: x.sofaFunction, sourceRequestId: x.sourceRequestId,
     };
   }
@@ -564,7 +509,6 @@ export function displayCopyFrom(src: DuplicateSource): DisplayCopy {
     code: r.supplierCode, photoUrl: null, fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, size: r.size,
     height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules], layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), qty: 1,
     lengthCm: cmOf(r.lengthCm), widthCm: cmOf(r.widthCm), sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
-    ...copiedParts(r.lengthParts, r.lengthShowParts, r.lengthCm, (n) => n),
     sourceRequestId: r.id,
   };
 }
@@ -606,7 +550,7 @@ export function exportText(r: LaunchRequest, ctx: ExportContext): string {
   if (r.type === 'sofa') {
     L.push(`Seat          : ${v(r.seat)}`);
     L.push(`Layout        : ${shapeName(r.modules)}`);
-    L.push(`Size (L × W)  : ${v(sizeText(r.lengthCm, r.widthCm, r.lengthParts, r.lengthShowParts))}`);
+    L.push(`Size (L × W)  : ${v(sizeText(r.lengthCm, r.widthCm))}`);
     L.push(`Category      : ${v(r.sofaCategory)}`);
     L.push(`Function      : ${v(r.sofaFunction)}`);
     L.push(`Photo         : ${photoLine(r)}`);

@@ -936,6 +936,14 @@ describe('length parts', () => {
     expect(body.request).toMatchObject({ lengthCm: 220, lengthParts: [120, 100], lengthShowParts: true });
   });
 
+  it('saves "show as x + y" with no typed parts: the POS works them out from the layout', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthShowParts: true }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ length_parts: null, length_show_parts: true });
+  });
+
   it('works the length out from the parts when none is sent', async () => {
     meAnswers(MARKETING);
     state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
