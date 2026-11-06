@@ -13,7 +13,7 @@
 // does what a new product carried (its request, NEW) — so no Duplicate there.
 
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { ImageUp, X } from 'lucide-react';
+import { ImageUp, Upload, X } from 'lucide-react';
 import { TakePhoto } from './TakePhoto';
 import {
   compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
@@ -384,7 +384,15 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
                 {shownPhoto ? (
                   <div className={s.photoCard}>
                     <img src={shownPhoto} alt="Photo to attach" className={s.refPhotoImg} />
-                    <button type="button" className={s.ghostBtn} onClick={() => { setOwnPhoto(null); setDropSaved(true); }}>Remove photo</button>
+                    {/* YH 2026-11-06: pick a new one in place; Save changes stores it. */}
+                    <div className={s.photoSide}>
+                    <label className={s.photoReplace}>
+                      <Upload size={16} strokeWidth={1.75} className={s.icon} />{photoBusy ? 'Preparing…' : 'Replace photo'}
+                      <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
+                    </label>
+                    <TakePhoto disabled={photoBusy} onFile={(e) => void onPhotoFile(e)} />
+                    <button type="button" className={`${s.ghostBtn} ${s.photoSideBtn}`} onClick={() => { setOwnPhoto(null); setDropSaved(true); }}>Remove photo</button>
+                    </div>
                   </div>
                 ) : (
                   <label className={s.planStrip}>
