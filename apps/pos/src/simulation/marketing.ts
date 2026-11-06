@@ -126,6 +126,7 @@ const displayWire = (r: Row) => ({
   photoAt: r.type === 'sofa' && r.source_request_id ? photos()[r.source_request_id]?.updated_at ?? null : null,
   remarks: r.remarks ?? '', dimsWidthCm: r.dims_width_cm ?? null, dimsDepthCm: r.dims_depth_cm ?? null,
   ownPhotoAt: photos()[`d:${r.id}`]?.updated_at ?? null, lengthShowParts: r.length_show_parts === true,
+  lengthParts: Array.isArray(r.length_parts) ? r.length_parts : null,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
@@ -345,6 +346,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     if (!row) return json({ error: 'not_found' }, 404);
     if (body.remarks !== undefined) row.remarks = String(body.remarks).trim();
     if (body.lengthShowParts !== undefined) row.length_show_parts = body.lengthShowParts === true;
+    if (body.lengthParts !== undefined) row.length_parts = body.lengthParts;
     if (body.dimsWidthCm !== undefined) { row.dims_width_cm = body.dimsWidthCm; row.dims_depth_cm = body.dimsDepthCm; }
     save();
     return json({ display: displayWire(row) });

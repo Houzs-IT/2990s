@@ -16,7 +16,7 @@ interface Props {
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
   /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
-  dimsLabel?: { w: number; h: number };
+  dimsLabel?: { w: number | string; h: number };
   /** Write each dim as its parts, '188 + 110 = 298' (Marketing, YH 2026-11-06). */
   showParts?: boolean;
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its

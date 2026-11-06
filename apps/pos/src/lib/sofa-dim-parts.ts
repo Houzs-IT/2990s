@@ -1,4 +1,4 @@
-import { cellBbox, type Cell, type Depth } from '@2990s/shared';
+import { cellBbox, cellsBbox, type Cell, type Depth } from '@2990s/shared';
 
 /* YH 2026-11-06: a sofa's length and depth "x + y" are worked out from its
    components, never typed. 188 × 95 beside 110 × 165 reads 188 + 110 = 298
@@ -31,4 +31,13 @@ export function layoutDimParts(cells: Cell[], depth: Depth, box: { x: number; y:
     w: partsLabel(axisParts(rects.map((r) => [r.x, r.x + r.w] as const), box.x, box.x + box.w), box.w),
     h: partsLabel(axisParts(rects.map((r) => [r.y, r.y + r.h] as const), box.y, box.y + box.h), box.h),
   };
+}
+
+/** The length cut at every component edge, whole cm, left to right: the
+ *  starting values when a display's diagram width is typed per component. */
+export function layoutWidthParts(cells: Cell[], depth: Depth): number[] {
+  const box = cellsBbox(cells, depth);
+  if (!box) return [];
+  const rects = cells.flatMap((c) => { const b = cellBbox(c, depth); return b ? [b] : []; });
+  return axisParts(rects.map((r) => [r.x, r.x + r.w] as const), box.x, box.x + box.w) ?? [Math.round(box.w)];
 }

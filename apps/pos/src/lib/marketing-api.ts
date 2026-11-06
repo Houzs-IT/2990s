@@ -62,7 +62,7 @@ interface WireDisplay {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null; accessories?: SofaPieces | null;
   remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhotoAt?: string | null;
-  lengthShowParts?: boolean;
+  lengthParts?: number[] | null; lengthShowParts?: boolean;
 }
 
 interface WireRequest {
@@ -104,6 +104,7 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, photoAt: w.photoAt ?? null,
   layout: w.layout ?? null, accessories: w.accessories ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
   dimsDepthCm: w.dimsDepthCm ?? null, ownPhotoAt: w.ownPhotoAt ?? null, lengthShowParts: w.lengthShowParts === true,
+  lengthParts: w.lengthParts?.length ? w.lengthParts : null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
@@ -283,6 +284,8 @@ export function useAddDisplay() {
  *  takes its photo off. */
 export type DisplayEdit = Partial<Omit<NewDisplay, 'venueId' | 'type' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId' | 'ownPhoto'>> & {
   dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhoto?: PreparedImage | null;
+  /** 0224: the diagram width typed as parts; they add up to it (the API checks). null clears them. */
+  lengthParts?: number[] | null;
   lengthShowParts?: boolean;
 };
 

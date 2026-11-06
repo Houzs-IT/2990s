@@ -8,7 +8,7 @@ import { ShowPartsChoice } from './ShowPartsChoice';
 import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
 import { TakePhoto } from './TakePhoto';
 import {
-  detailRows, diagramSizeProblem, moduleInfo, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
+  detailRows, diagramSizeProblem, lengthText, moduleInfo, partsFor, partsTotal, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
 } from './marketing-model';
 import { useMarketingOptions, type MarketingOptions } from './marketing-options';
@@ -16,6 +16,9 @@ import {
   prepareFloorplan, preparePhoto, useDeleteFloorplan, useDisplayPhoto, useEditDisplay, useFloorplan, usePutFloorplan, useRemoveDisplay, useRequestPhoto, type DisplayEdit, type MarketingState,
 } from '../../lib/marketing-api';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
+import { layoutWidthParts } from '../../lib/sofa-dim-parts';
+import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
+import type { Depth } from '@2990s/shared';
 import { RequestPhotoTile } from './RequestPhotoTile';
 import { AddDisplayModal } from './AddDisplayModal';
 import { ShowroomDialog } from './ShowroomDialog';
@@ -58,9 +61,26 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
   const [remarks, setRemarks] = useState(it.remarks);
   const [w, setW] = useState(it.dimsWidthCm == null ? '' : String(it.dimsWidthCm));
   const [d, setD] = useState(it.dimsDepthCm == null ? '' : String(it.dimsDepthCm));
+  // YH 2026-11-06: the diagram width can be typed per component; each box
+  // starts at that module's own length, and the width is their sum.
+  const autoParts = useMemo(() => {
+    if (it.type !== 'sofa') return [];
+    const depth = seatDepth(it.seat) as Depth;
+    const cells = it.layout?.length ? it.layout : cellsFromComboModules(it.modules.map((m) => [m]), depth);
+    return layoutWidthParts(cells, depth);
+  }, [it]);
+  const [parts, setParts] = useState<string[]>(() => (partsFor(it.lengthParts, it.dimsWidthCm) ?? autoParts).map(String));
+  const setPart = (i: number, v: string) => {
+    const next = parts.map((x, j) => (j === i ? v : x));
+    setParts(next);
+    const sum = partsTotal(next);
+    if (sum != null) setW(String(sum));
+  };
   const wn = Number(w), dn = Number(d);
   const blank = !w.trim() && !d.trim();
   const problem = diagramSizeProblem(w, d);
+  // Saved only while they add up to the width typed.
+  const typedParts = !blank && parts.length >= 2 ? partsFor(parts, w) : null;
   const dimsOk = !problem;
   const save = (p: DisplayEdit, done: string) =>
     edit.mutate({ id: it.id, ...p }, { onSuccess: () => toast(done), onError: (e) => toast((e as Error).message) });
@@ -128,8 +148,24 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
             <input type="number" min={1} max={1000} value={d} aria-label="Overall depth (cm)" placeholder="Depth" onChange={(e) => setD(e.target.value)} className={`${s.input} ${s.inchInput}`} />
             <span className={s.inchUnit}>cm</span>
           </div>
-          {it.dimsWidthCm == null && (
-            // Parts come from the layout, so a typed size is one number.
+          {parts.length >= 2 && (
+            <>
+              <div className={s.compsTitle}>Width by component</div>
+              <div className={`${s.inchRow} ${s.inchRowWrap}`}>
+                {parts.map((x, i) => (
+                  <span key={i} className={s.lengthPart}>
+                    {i > 0 && <span className={s.inchUnit}>+</span>}
+                    <input type="number" inputMode="numeric" min={1} max={1000} value={x} aria-label={`Component ${i + 1} width (cm)`}
+                      onChange={(e) => setPart(i, e.target.value)} className={`${s.input} ${s.inchInput}`} />
+                  </span>
+                ))}
+                <span className={s.inchUnit}>= {partsTotal(parts) ?? '—'}</span>
+              </div>
+              {!blank && !typedParts && <div className={s.refPhotoNote}>The components don't add up to the width, so only the width is saved.</div>}
+            </>
+          )}
+          {(it.dimsWidthCm == null || partsFor(it.lengthParts, it.dimsWidthCm)) && (
+            // Untyped: the layout's parts. Typed: the components typed above.
             <ShowPartsChoice show={!!it.lengthShowParts} disabled={edit.isPending}
               onChange={(v) => save({ lengthShowParts: v }, 'Size display saved')} />
           )}
@@ -138,7 +174,7 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
           </div>
           <button
             type="button" className={s.ghostBtn} disabled={edit.isPending || !dimsOk}
-            onClick={() => save(blank ? { dimsWidthCm: null, dimsDepthCm: null } : { dimsWidthCm: wn, dimsDepthCm: dn }, 'Diagram size saved')}
+            onClick={() => save(blank ? { dimsWidthCm: null, dimsDepthCm: null, lengthParts: null } : { dimsWidthCm: wn, dimsDepthCm: dn, lengthParts: typedParts }, 'Diagram size saved')}
           >Save size</button>
         </div>
       )}
@@ -453,7 +489,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                 {drawerPhoto ? <img src={drawerPhoto} alt={`${drawer.it.name} photo`} className={s.drawerPicImg} /> : (<>
                 {drawer.it.type === 'sofa' && (
                   <SofaLayoutPreview layout={drawer.it.layout} pieces={drawer.it.accessories} pieceOptions={opts.sofaAccessoryById} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims showParts={!!drawer.it.lengthShowParts}
-                    dimsLabel={drawer.it.dimsWidthCm != null && drawer.it.dimsDepthCm != null ? { w: drawer.it.dimsWidthCm, h: drawer.it.dimsDepthCm } : undefined} />
+                    dimsLabel={drawer.it.dimsWidthCm != null && drawer.it.dimsDepthCm != null ? { w: lengthText(drawer.it.dimsWidthCm, drawer.it.lengthParts, drawer.it.lengthShowParts), h: drawer.it.dimsDepthCm } : undefined} />
                 )}
                 {drawer.it.type !== 'sofa' && !photoOf(drawer.it, opts) && <span className={s.drawerInitial}>{initialOf(drawer.it.name)}</span>}
                 </>)}
@@ -467,7 +503,7 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                   <div key={row.k} className={s.kvRow}><span className={s.kvKey}>{row.k}</span><span className={s.kvVal}>{row.v}</span></div>
                 ))}
               </div>
-              <DisplayExtras key={`${drawer.it.id}|${drawer.it.remarks}|${drawer.it.dimsWidthCm}|${drawer.it.dimsDepthCm}|${drawer.it.lengthShowParts}`} it={drawer.it} toast={toast} />
+              <DisplayExtras key={`${drawer.it.id}|${drawer.it.remarks}|${drawer.it.dimsWidthCm}|${drawer.it.dimsDepthCm}|${drawer.it.lengthParts?.join('+')}|${drawer.it.lengthShowParts}`} it={drawer.it} toast={toast} />
               {drawer.it.type === 'sofa' && drawer.it.sourceRequestId && drawer.it.photoAt && (
                 <RequestPhoto requestId={drawer.it.sourceRequestId} version={drawer.it.photoAt} />
               )}

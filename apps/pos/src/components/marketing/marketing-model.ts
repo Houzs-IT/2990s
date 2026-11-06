@@ -80,6 +80,9 @@ export interface DisplayItem {
    *  size computed from the layout. Never the product's own size. */
   dimsWidthCm: number | null;
   dimsDepthCm: number | null;
+  /** The diagram width typed as parts (0224, YH 2026-11-06): they add up to
+   *  dimsWidthCm. Absent / null = none typed, so the layout's own parts show. */
+  lengthParts?: number[] | null;
   /** Write the diagram's length and depth as its components' parts, x + y. */
   lengthShowParts?: boolean;
   /** Version of the photo attached when it was added; null when none. */
@@ -177,6 +180,38 @@ export function cmOf(v: string | number | null | undefined): number | null {
   if (v == null || String(v).trim() === '') return null;
   const n = Math.round(Number(v));
   return Number.isFinite(n) && n >= 1 && n <= 1000 ? n : null;
+}
+
+/* ── a diagram width typed as parts (0224, YH 2026-11-06) ─────────────────── */
+
+/** At most this many parts to a length (the API's limit). */
+export const MAX_LENGTH_PARTS = 6;
+
+type Parts = readonly (string | number)[] | null | undefined;
+
+/** The parts' sum in whole cm, or null while one is blank or not a usable size. */
+export function partsTotal(parts: Parts): number | null {
+  if (!parts?.length) return null;
+  const cms = parts.map(cmOf);
+  if (cms.some((x) => x == null)) return null;
+  const sum = (cms as number[]).reduce((a, x) => a + x, 0);
+  return sum <= 1000 ? sum : null;
+}
+
+/** Parts as the API takes them: 2 or more usable sizes, else null. */
+export const partsOut = (parts: Parts): number[] | null =>
+  parts && parts.length >= 2 && partsTotal(parts) != null ? parts.map((x) => cmOf(x)!) : null;
+
+/** The parts, only when they add up to this length. */
+export const partsFor = (parts: Parts, length: string | number | null | undefined): number[] | null => {
+  const p = partsOut(parts), l = cmOf(length);
+  return p && l != null && partsTotal(p) === l ? p : null;
+};
+
+/** '120 + 100 = 220' when typed parts add up to it and are to be shown, else '220'. */
+export function lengthText(length: number, parts?: Parts, show?: boolean): string {
+  const p = show ? partsFor(parts, length) : null;
+  return p ? `${p.join(' + ')} = ${length}` : String(length);
 }
 
 /** '220 × 95 cm', or '' while either side is missing. */

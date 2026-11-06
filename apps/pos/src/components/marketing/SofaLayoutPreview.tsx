@@ -29,7 +29,7 @@ export const SofaLayoutPreview = ({ layout, pieces, pieceOptions, modules, depth
   /** Draw the length × depth cm lines (the bigger previews). */
   dims?: boolean;
   /** W × D cm to print instead of the computed size (a display's own override). */
-  dimsLabel?: { w: number; h: number };
+  dimsLabel?: { w: number | string; h: number };
   /** Write the dims as the components' parts, x + y. */
   showParts?: boolean;
   pad?: number;

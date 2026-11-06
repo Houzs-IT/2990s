@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { axisParts, partsLabel } from './sofa-dim-parts';
+import { layoutWidthParts } from './sofa-dim-parts';
+import { lengthText, partsFor } from '../components/marketing/marketing-model';
 
 describe('axisParts', () => {
   // YH's example: 188 × 95 beside 110 × 165, backs flush.
@@ -29,5 +31,21 @@ describe('axisParts', () => {
 
   it('gives an arm outside the modules its own part, and ignores sub-cm noise', () => {
     expect(axisParts([[15, 203.4]], 0, 218.6)).toEqual([15, 188, 16]);
+  });
+});
+
+describe('layoutWidthParts', () => {
+  it('is empty for no cells', () => {
+    expect(layoutWidthParts([], 95 as never)).toEqual([]);
+  });
+});
+
+describe('partsFor', () => {
+  it('keeps typed parts only when they add up to the width', () => {
+    expect(partsFor(['120', '100'], '220')).toEqual([120, 100]);
+    expect(partsFor(['120', '90'], '220')).toBeNull();
+    expect(partsFor(['220'], '220')).toBeNull();
+    expect(lengthText(220, [120, 100], true)).toBe('120 + 100 = 220');
+    expect(lengthText(220, [120, 100], false)).toBe('220');
   });
 });
