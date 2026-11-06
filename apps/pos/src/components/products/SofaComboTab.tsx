@@ -16,7 +16,7 @@
 //
 // Layout:
 //   header   — "Sofa Combo Pricing" + subtitle + "+ New Combo"
-//   filters  — Base model dropdown + "N rules"
+//   filters  — Model dropdown (Model names; base_model codes as values) + "N rules"
 //   list     — grouped by base model; each combo card has the module
 //              composition + tier + per-seat-height prices + Effective date
 //              + Edit/History/Delete actions.
@@ -105,15 +105,30 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
     ? maintValues(heightsCfgQ.data.data.sofaSizes)
     : HEIGHTS_FALLBACK;
 
-  const baseModels = useMemo(() => {
+  // Combos are stored against the base_model CODE, so the code stays the key
+  // (filter value, grouping, saves). Staff read the Model's live NAME, as in
+  // the SKU Master filter (#829): owner 2026-11-06, "follow the model name".
+  // A code with no named SKU shows as itself.
+  const modelNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const p of productsQ.data ?? []) {
+      const name = p.model_name?.trim();
+      if (p.base_model && name) names.set(p.base_model, name);
+    }
+    return names;
+  }, [productsQ.data]);
+  const modelName = (code: string): string => modelNames.get(code) ?? code;
+
+  const baseModels = useMemo<ModelOption[]>(() => {
     const set = new Set<string>();
     for (const p of productsQ.data ?? []) {
-      const bm = (p as unknown as { base_model?: string | null }).base_model;
-      if (bm) set.add(bm);
+      if (p.base_model) set.add(p.base_model);
     }
     for (const r of combosQ.data ?? []) set.add(r.baseModel);
-    return [...set].sort();
-  }, [productsQ.data, combosQ.data]);
+    return [...set]
+      .map((code) => ({ code, name: modelNames.get(code) ?? code }))
+      .sort(byModelName);
+  }, [productsQ.data, combosQ.data, modelNames]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, SofaComboRule[]>();
@@ -122,8 +137,11 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
       arr.push(r);
       map.set(r.baseModel, arr);
     }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [combosQ.data]);
+    return [...map.entries()].sort((a, b) => byModelName(
+      { code: a[0], name: modelNames.get(a[0]) ?? a[0] },
+      { code: b[0], name: modelNames.get(b[0]) ?? b[0] },
+    ));
+  }, [combosQ.data, modelNames]);
 
   const total = combosQ.data?.length ?? 0;
 
@@ -170,10 +188,11 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
         <select
           value={baseModelFilter}
           onChange={(e) => setBaseModelFilter(e.target.value)}
+          aria-label="Model"
           style={selectStyle}
         >
-          <option value="">All base models</option>
-          {baseModels.map((m) => <option key={m} value={m}>{m}</option>)}
+          <option value="">All models</option>
+          {baseModels.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
         </select>
         <div style={{ flex: 1 }} />
         <span style={{
@@ -208,7 +227,7 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
               margin: 0,
               padding: '4px 0',
             }}>
-              {model} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>({rules.length} combo{rules.length !== 1 ? 's' : ''})</span>
+              {modelName(model)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>({rules.length} combo{rules.length !== 1 ? 's' : ''})</span>
             </h3>
             <div style={{
               display: 'grid',
@@ -219,6 +238,7 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
+                  modelName={modelName(r.baseModel)}
                   heights={heights}
                   /* canEdit gates Edit + Delete on existing cards. add-only
                      viewers see the card but no per-card edit affordances. */
@@ -241,24 +261,36 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           baseModels={baseModels}
+          modelName={modelName}
           heights={heights}
           onClose={() => setComposer({ open: false })}
         />
       )}
 
       {historyFor && (
-        <HistoryModal rule={historyFor} heights={heights} onClose={() => setHistoryFor(null)} />
+        <HistoryModal
+          rule={historyFor}
+          modelName={modelName(historyFor.baseModel)}
+          heights={heights}
+          onClose={() => setHistoryFor(null)}
+        />
       )}
     </div>
   );
 };
 
+type ModelOption = { code: string; name: string };
+
+const byModelName = (a: ModelOption, b: ModelOption): number =>
+  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) || a.code.localeCompare(b.code);
+
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, heights, onEdit, onHistory, onDelete, canEdit = true,
+  rule, modelName, heights, onEdit, onHistory, onDelete, canEdit = true,
 }: {
   rule: SofaComboRule;
+  modelName: string;
   heights: string[];
   onEdit: () => void;
   onHistory: () => void;
@@ -280,7 +312,7 @@ function ComboCard({
       gap: 8,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <span style={chipStyleStrong}>{rule.baseModel}</span>
+        <span style={chipStyleStrong}>{modelName}</span>
         <span style={{
           flex: 1,
           fontFamily: 'var(--font-sans)',
@@ -354,10 +386,11 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, heights, onClose,
+  editing, baseModels, modelName, heights, onClose,
 }: {
   editing?: SofaComboRule;
-  baseModels: string[];
+  baseModels: ModelOption[];
+  modelName: (code: string) => string;
   heights: string[];
   onClose: () => void;
 }) {
@@ -423,7 +456,7 @@ function ComposerModal({
   const removeSlot = (idx: number) => setModules((cur) => cur.filter((_, i) => i !== idx));
 
   const submit = async () => {
-    if (!baseModel) return alert('Base model is required.');
+    if (!baseModel) return alert('Choose a model.');
     const orderedModules = modules
       .map((slot) => [...new Set(slot.map((c) => c.trim()).filter(Boolean))])
       .filter((slot) => slot.length > 0);
@@ -474,7 +507,7 @@ function ComposerModal({
         // stop, and point the user to edit the existing combo instead.
         const dup = findDuplicateCombo(baseModel, orderedModules, existingCombosQ.data ?? []);
         if (dup) {
-          return alert(`A combo for these modules already exists on ${baseModel}. Edit that combo instead of adding a duplicate.`);
+          return alert(`A combo for these modules already exists on ${modelName(baseModel)}. Edit that combo instead of adding a duplicate.`);
         }
         await create.mutateAsync({
           baseModel,
@@ -499,21 +532,19 @@ function ComposerModal({
   return (
     <ModalShell title={editing ? 'Edit combo' : 'New combo'} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <Field label="Base model">
+        <Field label="Model">
           {editing ? (
-            <input value={baseModel} readOnly style={readonlyInputStyle} />
+            <input value={modelName(baseModel)} readOnly style={readonlyInputStyle} />
           ) : (
-            <input
-              list="base-model-list"
+            <select
               value={baseModel}
               onChange={(e) => setBaseModel(e.target.value)}
-              placeholder="e.g. 5530"
               style={inputStyle}
-            />
+            >
+              <option value="">Choose a model</option>
+              {baseModels.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
+            </select>
           )}
-          <datalist id="base-model-list">
-            {baseModels.map((m) => <option key={m} value={m} />)}
-          </datalist>
         </Field>
 
         <Field label={`Modules (${modules.filter((s) => s.some((c) => c.trim())).length} slot${modules.length === 1 ? '' : 's'})`}>
@@ -671,7 +702,12 @@ function ComposerModal({
 
 // ─── History modal ────────────────────────────────────────────────────
 
-function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights: string[]; onClose: () => void }) {
+function HistoryModal({ rule, modelName, heights, onClose }: {
+  rule: SofaComboRule;
+  modelName: string;
+  heights: string[];
+  onClose: () => void;
+}) {
   const historyQ = useSofaComboHistory({
     baseModel: rule.baseModel,
     modules: rule.modules,
@@ -683,7 +719,7 @@ function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights
   return (
     <ModalShell title="Combo history" onClose={onClose}>
       <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-        {rule.baseModel} · {buildComboLabel(rule.modules)}{rule.tier ? ` · ${rule.tier}` : ''}
+        {modelName} · {buildComboLabel(rule.modules)}{rule.tier ? ` · ${rule.tier}` : ''}
       </div>
       {historyQ.isLoading ? <p>Loading…</p> : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

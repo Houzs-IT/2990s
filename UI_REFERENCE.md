@@ -191,6 +191,15 @@ remain available for fulfilment.
 
 These are intentional changes from the prototype's current state. Anything not on this list is a regression and must be reverted to the prototype's behaviour.
 
+### Sofa Combo Pricing model names · 6 November 2026
+
+Owner requested the Combo Pricing page to follow the Model name, not its code
+(7218 reads as TAMMAN). The model filter, the group headings, each combo card,
+the History title and the New combo model picker show the Model's saved name,
+sorted by name; the base_model code stays the key every combo is saved under.
+A code with no named SKU shows as itself. New combo picks from the list instead
+of free text.
+
 ### Customize · Add to Combo Price · 30 October 2026
 
 Owner requested an Add to Combo Price action beside Save as Quick Pick for
