@@ -15,7 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { bearerToken } from './apiClient';
-import { cmOf } from '../components/marketing/marketing-model';
+import { cmOf, partsFor } from '../components/marketing/marketing-model';
 import type {
   ComboRow, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
   SofaLayout, SofaPieces,
@@ -62,7 +62,7 @@ interface WireDisplay {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null; accessories?: SofaPieces | null;
   remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhotoAt?: string | null;
-  lengthParts?: number[] | null; lengthShowParts?: boolean;
+  lengthParts?: number[] | null; depthParts?: number[] | null; lengthShowParts?: boolean;
 }
 
 interface WireRequest {
@@ -73,6 +73,7 @@ interface WireRequest {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   photoMatch?: string; photoNote?: string; photoAt?: string | null; layout?: SofaLayout | null;
   accessories?: SofaPieces | null; lengthShowParts?: boolean;
+  lengthParts?: number[] | null; depthParts?: number[] | null;
 }
 
 export interface FloorplanMeta { venueId: string; updatedAt: string; fileName: string }
@@ -105,6 +106,7 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   layout: w.layout ?? null, accessories: w.accessories ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
   dimsDepthCm: w.dimsDepthCm ?? null, ownPhotoAt: w.ownPhotoAt ?? null, lengthShowParts: w.lengthShowParts === true,
   lengthParts: w.lengthParts?.length ? w.lengthParts : null,
+  depthParts: w.depthParts?.length ? w.depthParts : null,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
@@ -113,6 +115,8 @@ const toRequest = (w: WireRequest): LaunchRequest => ({
   divan: w.divan, gap: w.gap, modules: w.modules ?? [], layout: w.layout ?? null, accessories: w.accessories ?? null,
   lengthCm: w.lengthCm == null ? '' : String(w.lengthCm), widthCm: w.widthCm == null ? '' : String(w.widthCm),
   sofaCategory: w.sofaCategory ?? '', sofaFunction: w.sofaFunction ?? '', lengthShowParts: w.lengthShowParts === true,
+  lengthParts: w.lengthParts?.length ? w.lengthParts.map(String) : null,
+  depthParts: w.depthParts?.length ? w.depthParts.map(String) : null,
   photoAt: w.photoAt ?? null, photoUpload: null, photoMatch: asMatch(w.photoMatch), photoNote: w.photoNote ?? '',
   rows: (w.rows ?? []).map((r) => ({ modules: r.modules ?? [], price: r.price == null ? '' : String(r.price), layout: r.layout ?? null, accessories: r.accessories ?? null })),
   showroomId: w.venueId, action: w.action as RequestAction, replaceId: w.replaceId, by: w.by, byRole: w.byRole,
@@ -138,6 +142,9 @@ const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   accessories: piecesOut(d.layout, d.accessories),
   lengthCm: cmOf(d.lengthCm), widthCm: cmOf(d.widthCm), sofaCategory: d.sofaCategory, sofaFunction: d.sofaFunction,
   lengthShowParts: d.type === 'sofa' && !!d.lengthShowParts,
+  // Typed by component: sent only while they add up to the size typed.
+  lengthParts: d.type === 'sofa' ? partsFor(d.lengthParts, d.lengthCm) : null,
+  depthParts: d.type === 'sofa' ? partsFor(d.depthParts, d.widthCm) : null,
   photoMatch: d.photoMatch, photoNote: d.photoMatch === 'non_exact' ? d.photoNote.trim() : '',
   // Only a newly picked photo travels; leaving it out keeps the saved one. A
   // sofa's only — a mattress or bed frame form has no photo.
@@ -266,6 +273,9 @@ export interface NewDisplay {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null;
   remarks?: string;
+  /** The diagram's own W x D and its parts (0222 / 0224 / 0225), typed in the form. */
+  dimsWidthCm?: number | null; dimsDepthCm?: number | null;
+  lengthParts?: number[] | null; depthParts?: number[] | null; lengthShowParts?: boolean;
   /** A photo attached by hand (PNG / JPG, downscaled by preparePhoto). */
   ownPhoto?: PreparedImage;
 }
@@ -286,6 +296,8 @@ export type DisplayEdit = Partial<Omit<NewDisplay, 'venueId' | 'type' | 'lengthC
   dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhoto?: PreparedImage | null;
   /** 0224: the diagram width typed as parts; they add up to it (the API checks). null clears them. */
   lengthParts?: number[] | null;
+  /** 0225: the diagram depth as parts, the same way. */
+  depthParts?: number[] | null;
   lengthShowParts?: boolean;
 };
 

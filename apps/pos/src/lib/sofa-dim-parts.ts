@@ -33,11 +33,14 @@ export function layoutDimParts(cells: Cell[], depth: Depth, box: { x: number; y:
   };
 }
 
-/** The length cut at every component edge, whole cm, left to right: the
- *  starting values when a display's diagram width is typed per component. */
-export function layoutWidthParts(cells: Cell[], depth: Depth): number[] {
+/** A layout cut at every component edge, whole cm, along its width ('x',
+ *  left to right) or its depth ('y', back to front): the starting values when
+ *  a size is typed by component. */
+export function layoutAxisParts(cells: Cell[], depth: Depth, axis: 'x' | 'y'): number[] {
   const box = cellsBbox(cells, depth);
   if (!box) return [];
   const rects = cells.flatMap((c) => { const b = cellBbox(c, depth); return b ? [b] : []; });
-  return axisParts(rects.map((r) => [r.x, r.x + r.w] as const), box.x, box.x + box.w) ?? [Math.round(box.w)];
+  return axis === 'x'
+    ? axisParts(rects.map((r) => [r.x, r.x + r.w] as const), box.x, box.x + box.w) ?? [Math.round(box.w)]
+    : axisParts(rects.map((r) => [r.y, r.y + r.h] as const), box.y, box.y + box.h) ?? [Math.round(box.h)];
 }

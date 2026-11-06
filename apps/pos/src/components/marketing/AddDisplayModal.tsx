@@ -15,8 +15,12 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, Upload, X } from 'lucide-react';
 import { TakePhoto } from './TakePhoto';
+import type { Depth } from '@2990s/shared';
+import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
+import { layoutAxisParts } from '../../lib/sofa-dim-parts';
+import { PartsRow, ShowPartsChoice } from './ShowPartsChoice';
 import {
-  compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
+  compLine, displayCopyFrom, lengthText, partsFor, partsOut, partsTotal, seatDepth, shapeName, shownParts, sizeName, specOf, TYPES,
   type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type PreparedImage, type SofaLayout,
   type SofaPieces,
 } from './marketing-model';
@@ -149,6 +153,34 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
     }
   };
   const set = (p: Partial<AddState>) => setA((x) => ({ ...x, ...p }));
+  /* YH 2026-11-06: a sofa's diagram W x D typed one component at a time, and
+     whether it is written as x + y. Untyped (null) = the layout's own parts,
+     and the diagram keeps the size worked out from the layout. */
+  const [typedW, setTypedW] = useState<string[] | null>(() => partsFor(editing?.lengthParts, editing?.dimsWidthCm)?.map(String) ?? null);
+  const [typedD, setTypedD] = useState<string[] | null>(() => partsFor(editing?.depthParts, editing?.dimsDepthCm)?.map(String) ?? null);
+  const [showParts, setShowParts] = useState(!!editing?.lengthShowParts);
+  const autoParts = useMemo(() => {
+    if (!a.modules.length) return { x: [], y: [] };
+    const depth = seatDepth(a.seat) as Depth;
+    const cells = a.layout?.length ? a.layout : cellsFromComboModules(a.modules.map((m) => [m]), depth);
+    return { x: layoutAxisParts(cells, depth, 'x'), y: layoutAxisParts(cells, depth, 'y') };
+  }, [a.layout, a.modules, a.seat]);
+  const partsW = shownParts(typedW, autoParts.x), partsD = shownParts(typedD, autoParts.y);
+  const sizeTyped = !!(typedW || typedD);
+  // A side nobody typed keeps the size it was saved with, else the layout's.
+  const sumW = typedW ? partsTotal(partsW) : editing?.dimsWidthCm ?? partsTotal(partsW);
+  const sumD = typedD ? partsTotal(partsD) : editing?.dimsDepthCm ?? partsTotal(partsD);
+  /** A rebuilt layout has new components: an edit drops the parts saved for the old one. */
+  const [rebuilt, setRebuilt] = useState(false);
+  /** What the diagram's size saves as — sent only once a part was typed. */
+  const dimsOut = sizeTyped && sumW != null && sumD != null
+    ? { dimsWidthCm: sumW, dimsDepthCm: sumD, lengthParts: typedW ? partsOut(partsW) : null, depthParts: typedD ? partsOut(partsD) : null }
+    : editing && rebuilt ? { lengthParts: null, depthParts: null } : {};
+  const dimsLabel = sizeTyped && sumW != null && sumD != null
+    ? { w: lengthText(sumW, typedW ? partsW : null, showParts), h: lengthText(sumD, typedD ? partsD : null, showParts) }
+    : editing?.dimsWidthCm != null && editing.dimsDepthCm != null
+      ? { w: lengthText(editing.dimsWidthCm, editing.lengthParts, showParts), h: lengthText(editing.dimsDepthCm, editing.depthParts, showParts) }
+      : undefined;
 
   const models = opts.models[a.type];
   const model = models.find((m) => m.id === a.modelId);
@@ -191,7 +223,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
     if (isSofa && !a.modules.length) { setBuilding(true); return; }
     if (!ident) return;
     setErr('');
-    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout, accessories: piecesOut(a.layout, a.accessories) }
+    const extra = a.type === 'sofa' ? { fabric: a.fabric, colour: a.colour, leg: a.leg, seat: a.seat, modules: a.modules, layout: a.layout, accessories: piecesOut(a.layout, a.accessories), lengthShowParts: showParts, ...dimsOut }
       : a.type === 'mattress' ? { size: a.size, height: a.height.trim() }
       : a.type === 'bedframe' ? { size: a.size, fabric: a.fabric, colour: a.colour, leg: a.leg, divan: a.divan, gap: a.gap.trim() }
       : { qty: a.qty };
@@ -224,6 +256,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
 
   const duplicate = async (src: DuplicateSource) => {
     setA(copiedAdd(opts, displayCopyFrom(src)));
+    setTypedW(null); setTypedD(null);
     setErr('');
     setDuplicating(false);
   };
@@ -262,6 +295,16 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
                   <button type="button" className={s.buildBtn} onClick={() => setBuilding(true)}>
                     {a.modules.length ? 'Edit components' : 'Build components'}
                   </button>
+                </div>
+              )}
+
+              {isSofa && a.modules.length > 0 && (
+                <div className={s.field}>
+                  <span className={s.fieldLabel}>Diagram size</span>
+                  {partsW.length >= 2 && <PartsRow label="Width" parts={partsW} onChange={setTypedW} />}
+                  {partsD.length >= 2 && <PartsRow label="Depth" parts={partsD} onChange={setTypedD} />}
+                  {(partsW.length >= 2 || partsD.length >= 2) && <ShowPartsChoice show={showParts} onChange={setShowParts} />}
+                  {sizeTyped && (sumW == null || sumD == null) && <div className={s.refPhotoNote}>Every component needs a size from 1 to 1000 cm.</div>}
                 </div>
               )}
 
@@ -411,7 +454,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
 
             <div className={s.modalRight}>
               <div className={s.previewPane} style={photo ? { backgroundImage: `url("${photo}")` } : undefined}>
-                {isSofa && <SofaLayoutPreview layout={a.layout} pieces={a.accessories} pieceOptions={opts.sofaAccessoryById} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} dims />}
+                {isSofa && <SofaLayoutPreview layout={a.layout} pieces={a.accessories} pieceOptions={opts.sofaAccessoryById} modules={a.modules} depth={seatDepth(a.seat)} art={opts.moduleArt} dims dimsLabel={dimsLabel} showParts={showParts} />}
               </div>
               <div>
                 <div className={s.previewName}>{preview.name}</div>
@@ -419,7 +462,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
               </div>
               {err && <div className={s.formError}>{err}</div>}
               <div className={s.spacer} />
-              <button type="button" className={s.submitBig} disabled={pending || (!ident && !isSofa)} onClick={() => void submit()}>
+              <button type="button" className={s.submitBig} disabled={pending || (!ident && !isSofa) || (sizeTyped && (sumW == null || sumD == null))} onClick={() => void submit()}>
                 {editing ? 'Save changes' : `Add to ${showroom.name}`}
               </button>
             </div>
@@ -448,7 +491,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
           leg={a.leg}
           onLeg={(v) => set({ leg: v })}
           onCancel={() => setBuilding(false)}
-          onSave={({ layout, modules, accessories }) => { set({ modules, layout, accessories }); setBuilding(false); }}
+          onSave={({ layout, modules, accessories }) => { set({ modules, layout, accessories }); setTypedW(null); setTypedD(null); setRebuilt(true); setBuilding(false); }}
         />
       )}
 

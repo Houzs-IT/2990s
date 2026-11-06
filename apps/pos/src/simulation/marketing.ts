@@ -127,6 +127,7 @@ const displayWire = (r: Row) => ({
   remarks: r.remarks ?? '', dimsWidthCm: r.dims_width_cm ?? null, dimsDepthCm: r.dims_depth_cm ?? null,
   ownPhotoAt: photos()[`d:${r.id}`]?.updated_at ?? null, lengthShowParts: r.length_show_parts === true,
   lengthParts: Array.isArray(r.length_parts) ? r.length_parts : null,
+  depthParts: Array.isArray(r.depth_parts) ? r.depth_parts : null,
 });
 const requestWire = (r: Row) => ({
   id: r.id, type: r.type, status: r.status, supplierCode: r.supplier_code, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
@@ -134,6 +135,7 @@ const requestWire = (r: Row) => ({
   rows: r.combo_rows, venueId: r.venue_id, lengthCm: r.length_cm ?? null, widthCm: r.width_cm ?? null, sofaCategory: r.sofa_category ?? '', sofaFunction: r.sofa_function ?? '',
   photoMatch: r.photo_match ?? '', photoNote: r.photo_note ?? '', photoAt: photos()[r.id]?.updated_at ?? null,
   lengthShowParts: r.length_show_parts === true,
+  lengthParts: Array.isArray(r.length_parts) ? r.length_parts : null, depthParts: Array.isArray(r.depth_parts) ? r.depth_parts : null,
   action: r.action, replaceId: r.replace_display_id, by: r.requested_by_name, byRole: r.requested_by_role, createdAt: r.created_at, updatedAt: r.created_at,
 });
 const requestCols = (b: Row) => ({
@@ -142,6 +144,7 @@ const requestCols = (b: Row) => ({
   modules: b.modules ?? [], layout: b.layout ?? null, accessories: b.accessories ?? null, length_cm: b.lengthCm ?? null, width_cm: b.widthCm ?? null, sofa_category: b.sofaCategory ?? '',
   sofa_function: b.sofaFunction ?? '', photo_match: b.photoMatch ?? '', photo_note: b.photoMatch === 'non_exact' ? (b.photoNote ?? '') : '',
   combo_rows: b.rows ?? [], venue_id: b.venueId, action: b.action, length_show_parts: b.type === 'sofa' && b.lengthShowParts === true,
+  length_parts: b.type === 'sofa' ? (b.lengthParts ?? null) : null, depth_parts: b.type === 'sofa' ? (b.depthParts ?? null) : null,
   replace_display_id: b.action === 'replace' ? (b.replaceId ?? null) : null,
 });
 
@@ -329,6 +332,8 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       length_cm: sofa ? (body.lengthCm ?? null) : null, width_cm: sofa ? (body.widthCm ?? null) : null,
       sofa_category: sofa ? (body.sofaCategory ?? '') : '', sofa_function: sofa ? (body.sofaFunction ?? '') : '',
       remarks: String(body.remarks ?? '').trim(), dims_width_cm: sofa ? (body.dimsWidthCm ?? null) : null, dims_depth_cm: sofa ? (body.dimsDepthCm ?? null) : null,
+      length_parts: sofa ? (body.lengthParts ?? null) : null, depth_parts: sofa ? (body.depthParts ?? null) : null,
+      length_show_parts: sofa && body.lengthShowParts === true,
       created_at: now(), created_by_name: me.name,
     });
     keepPhoto(`d:${row.id}`, body.ownPhoto);
@@ -347,6 +352,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     if (body.remarks !== undefined) row.remarks = String(body.remarks).trim();
     if (body.lengthShowParts !== undefined) row.length_show_parts = body.lengthShowParts === true;
     if (body.lengthParts !== undefined) row.length_parts = body.lengthParts;
+    if (body.depthParts !== undefined) row.depth_parts = body.depthParts;
     if (body.dimsWidthCm !== undefined) { row.dims_width_cm = body.dimsWidthCm; row.dims_depth_cm = body.dimsDepthCm; }
     save();
     return json({ display: displayWire(row) });
@@ -399,6 +405,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
         is_new: true, fabric: row.fabric, colour: row.colour, leg: row.leg, seat: row.seat, modules: row.modules, layout: row.layout ?? null, accessories: row.accessories ?? null, size: row.size,
         height: row.height, divan: row.divan, gap: row.gap, length_cm: row.length_cm ?? null, width_cm: row.width_cm ?? null,
         sofa_category: row.sofa_category ?? '', sofa_function: row.sofa_function ?? '', source_request_id: row.id, length_show_parts: row.length_show_parts === true,
+        length_parts: row.length_parts ?? null, depth_parts: row.depth_parts ?? null,
         created_at: now(), created_by_name: me.name,
       });
       st.displays.push(created);

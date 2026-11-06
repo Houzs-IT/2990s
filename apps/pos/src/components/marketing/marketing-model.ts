@@ -83,6 +83,8 @@ export interface DisplayItem {
   /** The diagram width typed as parts (0224, YH 2026-11-06): they add up to
    *  dimsWidthCm. Absent / null = none typed, so the layout's own parts show. */
   lengthParts?: number[] | null;
+  /** The diagram depth the same way (0225): they add up to dimsDepthCm. */
+  depthParts?: number[] | null;
   /** Write the diagram's length and depth as its components' parts, x + y. */
   lengthShowParts?: boolean;
   /** Version of the photo attached when it was added; null when none. */
@@ -145,6 +147,11 @@ export interface LaunchRequest {
   /** Length × width in cm, the raw input text — '' until typed. */
   lengthCm: string;
   widthCm: string;
+  /** Length and width typed by component (0224 / 0225), the raw input text;
+   *  null = not typed, so the layout's own parts show. Saved only when they
+   *  add up to lengthCm / widthCm. */
+  lengthParts?: string[] | null;
+  depthParts?: string[] | null;
   /** Write the diagram's length and depth as its components' parts, x + y. */
   lengthShowParts?: boolean;
   /** Names from Marketing's own lists (Maintenance), as saved. */
@@ -186,6 +193,11 @@ export function cmOf(v: string | number | null | undefined): number | null {
 
 /** At most this many parts to a length (the API's limit). */
 export const MAX_LENGTH_PARTS = 6;
+
+/** The parts a form shows: the typed ones while they still match the layout's
+ *  components one for one, else the layout's own. */
+export const shownParts = (typed: readonly string[] | null | undefined, auto: readonly number[]): string[] =>
+  typed && typed.length === auto.length ? [...typed] : auto.map(String);
 
 type Parts = readonly (string | number)[] | null | undefined;
 
@@ -467,6 +479,7 @@ export function requestFieldsFrom(src: DuplicateSource): Partial<LaunchRequest> 
       type: r.type, supplierCode: r.supplierCode, model: r.model, fabric: r.fabric, colour: r.colour, leg: r.leg,
       seat: r.seat, size: r.size, height: r.height, divan: r.divan, gap: r.gap, modules: [...r.modules],
       layout: copyLayout(r.layout), accessories: copyPieces(r.accessories), lengthCm: r.lengthCm, widthCm: r.widthCm, lengthShowParts: !!r.lengthShowParts,
+      lengthParts: r.lengthParts ? [...r.lengthParts] : null, depthParts: r.depthParts ? [...r.depthParts] : null,
       sofaCategory: r.sofaCategory, sofaFunction: r.sofaFunction,
       rows: r.rows.map((x) => ({ modules: [...x.modules], price: x.price, layout: copyLayout(x.layout), accessories: copyPieces(x.accessories) })),
     };
