@@ -3282,6 +3282,11 @@ export const marketingDisplays = pgTable('marketing_displays', {
   remarks:         text('remarks').notNull().default(''),
   dimsWidthCm:     integer('dims_width_cm'),
   dimsDepthCm:     integer('dims_depth_cm'),
+  // 0224: the length typed as parts (x + y), whole cm. They add up to the
+  // length this display shows: dims_width_cm when set, else length_cm (the API
+  // checks). length_show_parts = print "x + y = total" instead of the total.
+  lengthParts:     integer('length_parts').array(),
+  lengthShowParts: boolean('length_show_parts').notNull().default(false),
   ownPhotoContentType: text('own_photo_content_type'),
   ownPhotoB64:     text('own_photo_b64'),
   ownPhotoFileName: text('own_photo_file_name'),
@@ -3298,6 +3303,7 @@ export const marketingDisplays = pgTable('marketing_displays', {
   sizeChk: check('marketing_displays_size_chk', sql`(${t.lengthCm} IS NULL OR ${t.lengthCm} BETWEEN 1 AND 1000) AND (${t.widthCm} IS NULL OR ${t.widthCm} BETWEEN 1 AND 1000)`),
   layoutChk: check('marketing_displays_layout_chk', sql`${t.layout} IS NULL OR jsonb_typeof(${t.layout}) = 'array'`),
   dimsChk: check('marketing_displays_dims_chk', sql`(${t.dimsWidthCm} IS NULL AND ${t.dimsDepthCm} IS NULL) OR (${t.dimsWidthCm} BETWEEN 1 AND 1000 AND ${t.dimsDepthCm} BETWEEN 1 AND 1000)`),
+  partsChk: check('marketing_displays_length_parts_chk', sql`${t.lengthParts} IS NULL OR (cardinality(${t.lengthParts}) BETWEEN 2 AND 6 AND array_position(${t.lengthParts}, NULL) IS NULL AND 1 <= ALL(${t.lengthParts}) AND 1000 >= ALL(${t.lengthParts}))`),
   idxLive: index('idx_marketing_displays_live').on(t.venueId, t.createdAt).where(sql`${t.removedAt} IS NULL`),
 }));
 
@@ -3339,6 +3345,9 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   // columns stay nullable / '' so requests saved before 0219 still load.
   lengthCm:         integer('length_cm'),
   widthCm:          integer('width_cm'),
+  // 0224: length_cm typed as parts (x + y) that add up to it (the API checks).
+  lengthParts:      integer('length_parts').array(),
+  lengthShowParts:  boolean('length_show_parts').notNull().default(false),
   sofaCategory:     text('sofa_category').notNull().default(''),   // a marketing_sofa_options name, as saved
   sofaFunction:     text('sofa_function').notNull().default(''),
   // The reference photo, inline like a floor plan; never selected by /state.
@@ -3379,6 +3388,7 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   photoChk:  check('marketing_launch_requests_photo_chk', sql`(${t.photoB64} IS NULL AND ${t.photoContentType} IS NULL AND ${t.photoBytes} IS NULL AND ${t.photoUpdatedAt} IS NULL) OR (${t.photoB64} IS NOT NULL AND ${t.photoUpdatedAt} IS NOT NULL AND ${t.photoContentType} IN ('image/png', 'image/jpeg', 'image/webp') AND ${t.photoBytes} > 0 AND ${t.photoBytes} <= 3145728)`),
   matchChk:  check('marketing_launch_requests_match_chk', sql`${t.photoMatch} IN ('', 'exact', 'non_exact')`),
   layoutChk: check('marketing_launch_requests_layout_chk', sql`${t.layout} IS NULL OR jsonb_typeof(${t.layout}) = 'array'`),
+  partsChk: check('marketing_launch_requests_length_parts_chk', sql`${t.lengthParts} IS NULL OR (cardinality(${t.lengthParts}) BETWEEN 2 AND 6 AND array_position(${t.lengthParts}, NULL) IS NULL AND 1 <= ALL(${t.lengthParts}) AND 1000 >= ALL(${t.lengthParts}))`),
   idxOpen:   index('idx_marketing_launch_requests_open').on(t.status, t.createdAt).where(sql`${t.status} IN ('pending', 'completed')`),
 }));
 

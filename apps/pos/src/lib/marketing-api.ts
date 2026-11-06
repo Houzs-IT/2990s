@@ -15,7 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { bearerToken } from './apiClient';
-import { cmOf } from '../components/marketing/marketing-model';
+import { cmOf, partsFor } from '../components/marketing/marketing-model';
 import type {
   ComboRow, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
   SofaLayout, SofaPieces,
@@ -62,6 +62,7 @@ interface WireDisplay {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null; photoAt?: string | null; layout?: SofaLayout | null; accessories?: SofaPieces | null;
   remarks?: string; dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhotoAt?: string | null;
+  lengthParts?: number[] | null; lengthShowParts?: boolean;
 }
 
 interface WireRequest {
@@ -72,6 +73,7 @@ interface WireRequest {
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   photoMatch?: string; photoNote?: string; photoAt?: string | null; layout?: SofaLayout | null;
   accessories?: SofaPieces | null;
+  lengthParts?: number[] | null; lengthShowParts?: boolean;
 }
 
 export interface FloorplanMeta { venueId: string; updatedAt: string; fileName: string }
@@ -103,6 +105,7 @@ const toDisplay = (w: WireDisplay): DisplayItem => ({
   sofaFunction: w.sofaFunction ?? '', sourceRequestId: w.sourceRequestId ?? null, photoAt: w.photoAt ?? null,
   layout: w.layout ?? null, accessories: w.accessories ?? null, remarks: w.remarks ?? '', dimsWidthCm: w.dimsWidthCm ?? null,
   dimsDepthCm: w.dimsDepthCm ?? null, ownPhotoAt: w.ownPhotoAt ?? null,
+  lengthParts: w.lengthParts ?? null, lengthShowParts: w.lengthShowParts === true,
 });
 
 const toRequest = (w: WireRequest): LaunchRequest => ({
@@ -110,6 +113,7 @@ const toRequest = (w: WireRequest): LaunchRequest => ({
   model: w.model, fabric: w.fabric, colour: w.colour, leg: w.leg, seat: w.seat, size: w.size, height: w.height,
   divan: w.divan, gap: w.gap, modules: w.modules ?? [], layout: w.layout ?? null, accessories: w.accessories ?? null,
   lengthCm: w.lengthCm == null ? '' : String(w.lengthCm), widthCm: w.widthCm == null ? '' : String(w.widthCm),
+  lengthParts: w.lengthParts?.length ? w.lengthParts.map(String) : null, lengthShowParts: w.lengthShowParts === true,
   sofaCategory: w.sofaCategory ?? '', sofaFunction: w.sofaFunction ?? '',
   photoAt: w.photoAt ?? null, photoUpload: null, photoMatch: asMatch(w.photoMatch), photoNote: w.photoNote ?? '',
   rows: (w.rows ?? []).map((r) => ({ modules: r.modules ?? [], price: r.price == null ? '' : String(r.price), layout: r.layout ?? null, accessories: r.accessories ?? null })),
@@ -129,12 +133,19 @@ const priceOut = (r: ComboRow): number | null => {
 export const piecesOut = (layout: SofaLayout | null | undefined, p: SofaPieces | null | undefined): SofaPieces | null =>
   (layout?.length && p?.length ? p : null);
 
+const lengthPartsOut = (d: LaunchRequest) => {
+  const p = partsFor(d.lengthParts, d.lengthCm);
+  return { lengthParts: p, lengthShowParts: !!(p && d.lengthShowParts) };
+};
+
 const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   type: d.type, status, supplierCode: d.supplierCode, model: d.model, fabric: d.fabric, colour: d.colour,
   leg: d.leg, seat: d.seat, size: d.size, height: d.height, divan: d.divan, gap: d.gap, modules: d.modules,
   layout: d.layout && d.layout.length ? d.layout : null,
   accessories: piecesOut(d.layout, d.accessories),
   lengthCm: cmOf(d.lengthCm), widthCm: cmOf(d.widthCm), sofaCategory: d.sofaCategory, sofaFunction: d.sofaFunction,
+  // 0224: parts only while they add up to the length sent (the API checks).
+  ...lengthPartsOut(d),
   photoMatch: d.photoMatch, photoNote: d.photoMatch === 'non_exact' ? d.photoNote.trim() : '',
   // Only a newly picked photo travels; leaving it out keeps the saved one. A
   // sofa's only — a mattress or bed frame form has no photo.
@@ -262,6 +273,8 @@ export interface NewDisplay {
    *  the launch request it came from. */
   lengthCm?: number | null; widthCm?: number | null; sofaCategory?: string; sofaFunction?: string;
   sourceRequestId?: string | null;
+  /** 0224: they must add up to lengthCm (Add on display has no diagram size). */
+  lengthParts?: number[] | null; lengthShowParts?: boolean;
   remarks?: string;
   /** A photo attached by hand (PNG / JPG, downscaled by preparePhoto). */
   ownPhoto?: PreparedImage;
@@ -279,7 +292,9 @@ export function useAddDisplay() {
 /** An edit of a piece on the floor: only the fields sent change. The showroom,
  *  the type and what a new product carried stay as saved. `ownPhoto: null`
  *  takes its photo off. */
-export type DisplayEdit = Partial<Omit<NewDisplay, 'venueId' | 'type' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId' | 'ownPhoto'>> & {
+export type DisplayEdit = Partial<Omit<NewDisplay, 'venueId' | 'type' | 'lengthCm' | 'widthCm' | 'sofaCategory' | 'sofaFunction' | 'sourceRequestId' | 'ownPhoto' | 'lengthParts'>> & {
+  /** 0224: they add up to the diagram width sent, else the one saved, else lengthCm. */
+  lengthParts?: number[] | null;
   dimsWidthCm?: number | null; dimsDepthCm?: number | null; ownPhoto?: PreparedImage | null;
 };
 
