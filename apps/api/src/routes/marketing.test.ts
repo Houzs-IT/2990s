@@ -917,3 +917,76 @@ describe('arrive', () => {
     expect(res.status).toBe(409);
   });
 });
+
+/* 0224 (YH 2026-11-05): a length typed as parts, x + y = length. */
+describe('length parts', () => {
+  const DID = '6f1f6c1e-0000-4000-8000-0000000000b1';
+  const RID = '6f1f6c1e-0000-4000-8000-0000000000b2';
+
+  it('saves a request’s parts and their choice, and gives them back on the wire', async () => {
+    meAnswers(MARKETING);
+    state.single = {
+      id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [],
+      length_cm: 220, width_cm: 95, length_parts: [120, 100], length_show_parts: true,
+    };
+    const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthParts: [120, 100], lengthShowParts: true }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ length_cm: 220, length_parts: [120, 100], length_show_parts: true });
+    const body = await res.json() as { request: Record<string, unknown> };
+    expect(body.request).toMatchObject({ lengthCm: 220, lengthParts: [120, 100], lengthShowParts: true });
+  });
+
+  it('works the length out from the parts when none is sent', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthCm: null, lengthParts: [150, 90] }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ length_cm: 240, length_parts: [150, 90], length_show_parts: false });
+  });
+
+  it('refuses parts that do not add up, a single part, or more than six', async () => {
+    meAnswers(MARKETING);
+    for (const lengthParts of [[120, 90], [220], [1, 1, 1, 1, 1, 1, 1], [120.5, 99.5]]) {
+      const r = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthParts }), env);
+      expect(r.status).toBe(400);
+    }
+    const put = await app().request(`/marketing/requests/${RID}`, json('PUT', { ...SOFA, lengthParts: [100, 100] }), env);
+    expect(put.status).toBe(400);
+    expect(state.inserted).toBeNull();
+    expect(state.updated).toBeNull();
+  });
+
+  it('checks a new display’s parts against its diagram width, else its length', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'd1', venue_id: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], qty: 1, length_parts: [150, 100], length_show_parts: true };
+    const ok = await app().request('/marketing/displays', json('POST', {
+      venueId: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], dimsWidthCm: 250, dimsDepthCm: 95, lengthCm: 220,
+      lengthParts: [150, 100], lengthShowParts: true,
+    }), env);
+    expect(ok.status).toBe(201);
+    expect(state.inserted).toMatchObject({ length_parts: [150, 100], length_show_parts: true });
+    expect((await ok.json() as { display: Record<string, unknown> }).display).toMatchObject({ lengthParts: [150, 100], lengthShowParts: true });
+    state.inserted = null;
+    const bad = await app().request('/marketing/displays', json('POST', {
+      venueId: '107', type: 'sofa', name: 'BOOQIT', modules: ['1S'], lengthCm: 220, lengthParts: [150, 100],
+    }), env);
+    expect(bad.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('edits a display’s parts with its diagram size, and drops saved parts that no longer add up', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'sofa', length_cm: 220, dims_width_cm: null, length_parts: [120, 100] };
+    const res = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: 260, dimsDepthCm: 95, lengthParts: [160, 100], lengthShowParts: true }), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toEqual({ dims_width_cm: 260, dims_depth_cm: 95, length_parts: [160, 100], length_show_parts: true });
+    const mismatch = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: 260, dimsDepthCm: 95, lengthParts: [120, 100] }), env);
+    expect(mismatch.status).toBe(400);
+    const plain = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: 230, dimsDepthCm: 95 }), env);
+    expect(plain.status).toBe(200);
+    expect(state.updated).toEqual({ dims_width_cm: 230, dims_depth_cm: 95, length_parts: null });
+    const back = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: null, dimsDepthCm: null }), env);
+    expect(back.status).toBe(200);
+    expect(state.updated).toEqual({ dims_width_cm: null, dims_depth_cm: null }); // 120 + 100 = its length 220 again
+  });
+});

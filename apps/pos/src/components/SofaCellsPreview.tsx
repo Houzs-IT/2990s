@@ -15,7 +15,7 @@ interface Props {
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
   /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
-  dimsLabel?: { w: number; h: number };
+  dimsLabel?: { w: number | string; h: number };  // w may read '120 + 100 = 220' (0224)
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
    *  LARGEST seat size). Keeps the front-back depth at a STABLE screen height
    *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
