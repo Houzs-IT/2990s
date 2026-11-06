@@ -1128,6 +1128,9 @@
    line on a phone. Below 640px: one column, the whole dialog scrolls. */
 @media (max-width: 640px) {
   .displayLayout, .board, .byProductGrid { grid-template-columns: minmax(0, 1fr); }
+  /* In one column a sticky, screen-tall rail sits on top of the content below
+     it as you scroll: let it scroll with the page instead. */
+  .rail, .modelRail { position: static; height: auto; min-height: 0; max-height: none; }
   .modalScrim { padding: 8px; }
   .modal { max-height: calc(100dvh - 16px); }
   .modalHead { padding: 12px 16px; }
