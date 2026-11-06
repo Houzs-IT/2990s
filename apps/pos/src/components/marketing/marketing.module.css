@@ -377,9 +377,6 @@
 .inchRow { display: flex; align-items: center; gap: 8px; }
 .inchInput { flex: 1; min-width: 0; }
 .inchUnit { font-size: 13px; color: var(--fg-muted); }
-/* A length typed as parts, x + y = length (0224). */
-.inchRowWrap { flex-wrap: wrap; }
-.lengthPart { display: flex; align-items: center; gap: 6px; flex: 1 1 140px; min-width: 0; }
 .previewPane {
   aspect-ratio: 4 / 3; border-radius: 10px; background-color: var(--c-paper); background-size: cover;
   background-position: center; display: flex; align-items: center; justify-content: center; padding: 10px;

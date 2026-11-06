@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   blankRequest, cmOf, diagramSizeProblem, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
-  lengthText, partsFor, partsOut, partsTotal, requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf, tagsOf, type DisplayItem,
+  requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf, tagsOf, type DisplayItem,
   type LaunchRequest,
 } from './marketing-model';
 
@@ -322,45 +322,5 @@ describe('diagramSizeProblem', () => {
     expect(diagramSizeProblem('280', '95')).toBe('');
     expect(diagramSizeProblem('', '')).toBe('');
     expect(diagramSizeProblem('0', '95')).toMatch(/whole cm/);
-  });
-});
-
-/* 0224 (YH 2026-11-05): a length typed as parts, x + y = length. */
-describe('length parts', () => {
-  it('adds the parts up, and only when every part is a usable size', () => {
-    expect(partsTotal(['120', '100'])).toBe(220);
-    expect(partsTotal(['120', ''])).toBeNull();
-    expect(partsTotal(['900', '200'])).toBeNull(); // over 1000 cm
-    expect(partsOut(['120', '100'])).toEqual([120, 100]);
-    expect(partsOut(['220'])).toBeNull();
-    expect(partsFor([120, 100], 220)).toEqual([120, 100]);
-    expect(partsFor([120, 100], 250)).toBeNull();
-  });
-
-  it('prints the parts when chosen and they add up, else the total', () => {
-    expect(lengthText(220, [120, 100], true)).toBe('120 + 100 = 220');
-    expect(lengthText(220, [120, 100], false)).toBe('220');
-    expect(lengthText(250, [120, 100], true)).toBe('250');
-    expect(lengthText(null, [120, 100], true)).toBe('');
-    expect(sizeText(220, 95, [120, 100], true)).toBe('(120 + 100 = 220) × 95 cm');
-    expect(sizeText(220, 95, [120, 100], false)).toBe('220 × 95 cm');
-  });
-
-  it('shows them in the detail rows and the brief', () => {
-    const it = item({ lengthCm: 220, widthCm: 95, lengthParts: [120, 100], lengthShowParts: true });
-    expect(detailRows(it).find((r) => r.k === 'Size')?.v).toBe('(120 + 100 = 220) × 95 cm');
-    const r = { ...blankRequest('YH', 'Marketing'), lengthCm: '220', widthCm: '95', lengthParts: ['120', '100'], lengthShowParts: true };
-    expect(exportText(r, { showroomName: null, replaceItem: null })).toContain('Size (L × W)  : (120 + 100 = 220) × 95 cm');
-  });
-
-  it('carries the parts through Duplicate only while they make up the length copied', () => {
-    const req: LaunchRequest = { ...blankRequest('YH', 'Marketing'), id: 'r1', lengthCm: '220', widthCm: '95', lengthParts: ['120', '100'], lengthShowParts: true };
-    expect(requestFieldsFrom({ kind: 'request', request: req })).toMatchObject({ lengthParts: ['120', '100'], lengthShowParts: true });
-    expect(displayCopyFrom({ kind: 'request', request: req })).toMatchObject({ lengthParts: [120, 100], lengthShowParts: true });
-    const arrived = item({ sourceRequestId: 'r1', lengthCm: 220, lengthParts: [120, 100], lengthShowParts: true });
-    expect(requestFieldsFrom({ kind: 'display', item: arrived })).toMatchObject({ lengthParts: ['120', '100'], lengthShowParts: true });
-    // Parts that make up the diagram width are not the product length's.
-    const widthOnly = item({ lengthCm: 220, dimsWidthCm: 260, dimsDepthCm: 95, lengthParts: [160, 100], lengthShowParts: true });
-    expect(displayCopyFrom({ kind: 'display', item: widthOnly })).toMatchObject({ lengthParts: null, lengthShowParts: false });
   });
 });

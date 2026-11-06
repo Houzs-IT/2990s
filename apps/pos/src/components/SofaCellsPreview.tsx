@@ -3,6 +3,7 @@ import { cellsBbox, findModule, moduleFootprint, groupSofas, isAccessoryModule, 
 import { measureArtBbox, getCachedArtBbox, ART_BBOX_FALLBACK } from '../lib/sofa-art';
 import { renderCornerSofa, cornerCompositeFromCells } from '../lib/sofa-corner';
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat } from '../lib/sofa-seamless';
+import { layoutDimParts } from '../lib/sofa-dim-parts';
 import { accessoryRects, boundsWithArms, type PlacedAccessory, type SofaAccessoryOption } from '../lib/sofa-accessories';
 import styles from './SofaCellsPreview.module.css';
 
@@ -15,7 +16,9 @@ interface Props {
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
   /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
-  dimsLabel?: { w: number | string; h: number };  // w may read '120 + 100 = 220' (0224)
+  dimsLabel?: { w: number; h: number };
+  /** Write each dim as its parts, '188 + 110 = 298' (Marketing, YH 2026-11-06). */
+  showParts?: boolean;
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
    *  LARGEST seat size). Keeps the front-back depth at a STABLE screen height
    *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
@@ -50,6 +53,8 @@ const tickH: CSSProperties = { width: 8, height: 1.5, background: DIM_INK, flexS
 const lineH: CSSProperties = { flex: 1, height: 1.5, background: DIM_INK };
 const lineV: CSSProperties = { flex: 1, width: 1.5, background: DIM_INK };
 const dimLabel: CSSProperties = { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--bg, #fff9eb)', color: DIM_INK, fontFamily: 'var(--font-mono, monospace)', fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', padding: '2px 8px', borderRadius: 3, whiteSpace: 'nowrap', lineHeight: 1, border: `1.5px solid ${DIM_INK}` };
+// The side label stacks its parts (95 / + 70 / = 165): there is no room across.
+const dimLabelStacked: CSSProperties = { ...dimLabel, whiteSpace: 'pre', lineHeight: 1.3, textAlign: 'right' };
 const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, opacity: 0.6 };
 
 /**
@@ -63,7 +68,7 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
 /** Module sizes sum to floats (282.99999999999994); the labels print whole cm. */
 export const wholeCm = (n: number) => Math.round(n);
 
-export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true, dimsLabel, accessories = [], accessoryOptions = new Map() }: Props) => {
+export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect, artSrc = bundledPng, tileBundles = true, dimsLabel, showParts = false, accessories = [], accessoryOptions = new Map() }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
@@ -245,14 +250,14 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
             <span style={tickV} />
             <span style={lineH} />
             <span style={tickV} />
-            <span style={dimLabel}>{dimsLabel?.w ?? wholeCm(bb.w)}<span style={dimUnit}>cm</span></span>
+            <span style={dimLabel}>{dimsLabel?.w ?? (showParts ? layoutDimParts(cells, depth, bb).w : wholeCm(bb.w))}<span style={dimUnit}>cm</span></span>
           </div>
           {/* Right depth dim — same, rotated to the right edge. */}
           <div style={dimRight} aria-hidden="true">
             <span style={tickH} />
             <span style={lineV} />
             <span style={tickH} />
-            <span style={dimLabel}>{dimsLabel?.h ?? wholeCm(bb.h)}<span style={dimUnit}>cm</span></span>
+            <span style={showParts && !dimsLabel ? dimLabelStacked : dimLabel}>{dimsLabel?.h ?? (showParts ? layoutDimParts(cells, depth, bb).h.replace(/ ([+=]) /g, '\n$1 ') : wholeCm(bb.h))}<span style={dimUnit}>cm</span></span>
           </div>
         </>
       )}
