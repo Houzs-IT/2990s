@@ -178,6 +178,8 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
     return { it, s: showrooms.find((x) => x.id === it.venueId) ?? { id: it.venueId, name: 'Showroom', area: '' } };
   };
   const drawer = findItem(drawerId);
+  // YH 2026-11-06: a piece's own photo replaces the drawing at the top of the drawer.
+  const drawerPhoto = useDisplayPhoto(drawer?.it.id ?? null, drawer?.it.ownPhotoAt ?? null).data;
   const confirm = findItem(confirmId);
   const editItem = findItem(editId);
 
@@ -447,12 +449,14 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
               </button>
             </div>
             <div className={s.drawerBody}>
-              <div className={s.drawerPic} style={bg(photoOf(drawer.it, opts))}>
+              <div className={s.drawerPic} style={drawerPhoto ? undefined : bg(photoOf(drawer.it, opts))}>
+                {drawerPhoto ? <img src={drawerPhoto} alt={`${drawer.it.name} photo`} className={s.drawerPicImg} /> : (<>
                 {drawer.it.type === 'sofa' && (
                   <SofaLayoutPreview layout={drawer.it.layout} pieces={drawer.it.accessories} pieceOptions={opts.sofaAccessoryById} modules={drawer.it.modules} depth={seatDepth(drawer.it.seat)} art={opts.moduleArt} dims showParts={!!drawer.it.lengthShowParts}
                     dimsLabel={drawer.it.dimsWidthCm != null && drawer.it.dimsDepthCm != null ? { w: drawer.it.dimsWidthCm, h: drawer.it.dimsDepthCm } : undefined} />
                 )}
                 {drawer.it.type !== 'sofa' && !photoOf(drawer.it, opts) && <span className={s.drawerInitial}>{initialOf(drawer.it.name)}</span>}
+                </>)}
               </div>
               <div>
                 <div className={s.drawerName}>{drawer.it.name}</div>
