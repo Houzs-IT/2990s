@@ -222,7 +222,7 @@ const remarksField = z.string().trim().max(1000);
 const DISPLAY_SELECT =
   'id, venue_id, type, model_id, name, code, photo_url, is_new, fabric, colour, leg, seat, ' +
   'modules, layout, accessories, size, height, divan, gap, qty, length_cm, width_cm, sofa_category, sofa_function, ' +
-  'source_request_id, remarks, dims_width_cm, dims_depth_cm, length_parts, length_show_parts, own_photo_updated_at, created_at, created_by_name';
+  'source_request_id, remarks, dims_width_cm, dims_depth_cm, length_parts, depth_parts, length_show_parts, own_photo_updated_at, created_at, created_by_name';
 
 const cmOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
 const timeOrNull = (v: unknown): string | null => (v == null ? null : String(v));
@@ -266,6 +266,8 @@ const displayToWire = (r: Record<string, unknown>, photoAt: string | null = null
   dimsDepthCm: cmOrNull(r.dims_depth_cm),
   // 0224: they add up to dimsWidthCm when set, else lengthCm.
   lengthParts: partsOrNull(r.length_parts),
+  // 0225: the depth the same way — dimsDepthCm when set, else widthCm.
+  depthParts: partsOrNull(r.depth_parts),
   lengthShowParts: r.length_show_parts === true,
   ownPhotoAt: timeOrNull(r.own_photo_updated_at),
   createdAt: String(r.created_at ?? ''),
@@ -306,6 +308,8 @@ const displayFields = z.object({
   // 0224: the display's length as parts — they add up to dimsWidthCm when
   // set, else lengthCm.
   lengthParts: lengthParts.optional().default(null),
+  // 0225: its depth as parts — dimsDepthCm when set, else widthCm.
+  depthParts: lengthParts.optional().default(null),
   lengthShowParts: z.boolean().optional().default(false),
   ownPhoto: imageSchema.optional(),
 });
@@ -316,6 +320,9 @@ const displayCreateSchema = displayFields.superRefine((v, ctx) => {
   }
   if (v.lengthParts && partsSum(v.lengthParts) !== (v.dimsWidthCm ?? v.lengthCm)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lengthParts'], message: PARTS_MISMATCH });
+  }
+  if (v.depthParts && partsSum(v.depthParts) !== (v.dimsDepthCm ?? v.widthCm)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['depthParts'], message: PARTS_MISMATCH });
   }
   // A sofa on the floor is its compartments; one with none is not a display.
   if (v.type === 'sofa' && v.modules.length === 0) {
@@ -329,7 +336,7 @@ const displayCreateSchema = displayFields.superRefine((v, ctx) => {
 // photo is read one request at a time (GET /requests/:id/photo).
 const REQUEST_SELECT =
   'id, type, status, supplier_code, model, fabric, colour, leg, seat, size, height, divan, gap, ' +
-  'modules, layout, accessories, length_cm, width_cm, length_parts, length_show_parts, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
+  'modules, layout, accessories, length_cm, width_cm, length_parts, depth_parts, length_show_parts, sofa_category, sofa_function, photo_match, photo_note, photo_updated_at, ' +
   'combo_rows, venue_id, action, replace_display_id, requested_by_name, requested_by_role, created_at, updated_at';
 
 type ComboRow = { modules: string[]; price: number | null; layout: LayoutCell[] | null; accessories: SofaPiece[] | null };
@@ -365,8 +372,9 @@ const requestToWire = (r: Record<string, unknown>) => ({
   accessories: piecesToWire(r.accessories),
   lengthCm: cmOrNull(r.length_cm),
   widthCm: cmOrNull(r.width_cm),
-  // 0224: lengthCm typed as parts that add up to it.
+  // 0224: lengthCm typed as parts that add up to it; 0225: widthCm (the depth) too.
   lengthParts: partsOrNull(r.length_parts),
+  depthParts: partsOrNull(r.depth_parts),
   lengthShowParts: r.length_show_parts === true,
   sofaCategory: String(r.sofa_category ?? ''),
   sofaFunction: String(r.sofa_function ?? ''),
@@ -418,6 +426,8 @@ const requestBodySchema = z.object({
   widthCm: cm.nullable().optional().default(null),
   // 0224: lengthCm typed as parts. Without a lengthCm it is their sum.
   lengthParts: lengthParts.optional().default(null),
+  // 0225: widthCm (the depth) typed as parts. Without a widthCm it is their sum.
+  depthParts: lengthParts.optional().default(null),
   lengthShowParts: z.boolean().optional().default(false),
   sofaCategory: short.optional().default(''),
   sofaFunction: short.optional().default(''),
@@ -431,12 +441,18 @@ const requestBodySchema = z.object({
   action: z.enum(['add', 'replace']),
   replaceId: z.string().regex(UUID_RE).nullable().optional(),
 }).superRefine((v, ctx) => {
-  if (!v.lengthParts) return;
-  const sum = partsSum(v.lengthParts);
-  if (v.lengthCm == null ? sum > 1000 : sum !== v.lengthCm) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['lengthParts'], message: PARTS_MISMATCH });
+  for (const [parts, total, path] of [[v.lengthParts, v.lengthCm, 'lengthParts'], [v.depthParts, v.widthCm, 'depthParts']] as const) {
+    if (!parts) continue;
+    const sum = partsSum(parts);
+    if (total == null ? sum > 1000 : sum !== total) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: PARTS_MISMATCH });
+    }
   }
-}).transform((v) => (v.lengthParts && v.lengthCm == null ? { ...v, lengthCm: partsSum(v.lengthParts) } : v));
+}).transform((v) => ({
+  ...v,
+  lengthCm: v.lengthParts && v.lengthCm == null ? partsSum(v.lengthParts) : v.lengthCm,
+  widthCm: v.depthParts && v.widthCm == null ? partsSum(v.depthParts) : v.widthCm,
+}));
 type RequestBody = z.infer<typeof requestBodySchema>;
 
 /** What a request still lacks that it needs to be SAVED at all, even to
@@ -523,6 +539,7 @@ const requestColumns = (b: RequestBody) => ({
   length_cm: b.lengthCm,
   width_cm: b.widthCm,
   length_parts: b.type === 'sofa' ? b.lengthParts : null,
+  depth_parts: b.type === 'sofa' ? b.depthParts : null,
   // Parts are worked out from the layout now (YH 2026-11-06); this only says how to print them.
   length_show_parts: b.type === 'sofa' && b.lengthShowParts,
   sofa_category: b.sofaCategory,
@@ -754,6 +771,7 @@ marketing.post('/displays', async (c) => {
       dims_width_cm: isSofa ? v.dimsWidthCm : null,
       dims_depth_cm: isSofa ? v.dimsDepthCm : null,
       length_parts: isSofa ? v.lengthParts : null,
+      depth_parts: isSofa ? v.depthParts : null,
       length_show_parts: isSofa && v.lengthShowParts,
       ...(own?.ok ? {
         own_photo_content_type: own.cols.photo_content_type,
@@ -804,7 +822,7 @@ marketing.post('/displays', async (c) => {
 const displayEditSchema = displayFields.pick({
   modelId: true, name: true, code: true, photoUrl: true, fabric: true, colour: true, leg: true, seat: true,
   modules: true, layout: true, accessories: true, size: true, height: true, divan: true, gap: true, qty: true,
-  remarks: true, dimsWidthCm: true, dimsDepthCm: true, lengthParts: true, lengthShowParts: true,
+  remarks: true, dimsWidthCm: true, dimsDepthCm: true, lengthParts: true, depthParts: true, lengthShowParts: true,
 }).partial().extend({
   ownPhoto: imageSchema.nullable().optional(),
 }).superRefine((v, ctx) => {
@@ -854,24 +872,32 @@ marketing.patch('/displays/:id', async (c) => {
       own_photo_updated_at: own.cols.photo_updated_at,
     });
   }
-  // 0224: the parts add up to the length the piece shows — the diagram width
-  // when set, else its product length — so they are checked against the row as
-  // it will be. Parts saved earlier that no longer add up are dropped.
-  if (v.lengthParts !== undefined || v.dimsWidthCm !== undefined) {
+  // 0224 / 0225: the parts add up to the length (depth) the piece shows — the
+  // diagram width (depth) when set, else its product length (width) — so they
+  // are checked against the row as it will be. Parts saved earlier that no
+  // longer add up are dropped.
+  if (v.lengthParts !== undefined || v.depthParts !== undefined || v.dimsWidthCm !== undefined) {
     const { data: cur, error: curErr } = await sb
-      .from('marketing_displays').select('id, length_cm, dims_width_cm, length_parts').eq('id', id).is('removed_at', null).maybeSingle();
+      .from('marketing_displays').select('id, length_cm, width_cm, dims_width_cm, dims_depth_cm, length_parts, depth_parts')
+      .eq('id', id).is('removed_at', null).maybeSingle();
     if (curErr) return c.json({ error: 'fetch_failed', reason: curErr.message }, 500);
     if (!cur) return c.json({ error: 'not_found', reason: 'This piece is no longer on display.' }, 404);
-    const row = cur as { length_cm?: unknown; dims_width_cm?: unknown; length_parts?: unknown };
-    const target = (v.dimsWidthCm !== undefined ? v.dimsWidthCm : cmOrNull(row.dims_width_cm)) ?? cmOrNull(row.length_cm);
-    if (v.lengthParts !== undefined) {
-      if (v.lengthParts && partsSum(v.lengthParts) !== target) {
-        return c.json({ error: 'validation_failed', issues: [{ path: ['lengthParts'], message: PARTS_MISMATCH }] }, 400);
+    const row = cur as Record<string, unknown>;
+    const axes = [
+      { sent: v.lengthParts, dims: v.dimsWidthCm, dimsCol: 'dims_width_cm', baseCol: 'length_cm', col: 'length_parts', path: 'lengthParts' },
+      { sent: v.depthParts, dims: v.dimsDepthCm, dimsCol: 'dims_depth_cm', baseCol: 'width_cm', col: 'depth_parts', path: 'depthParts' },
+    ] as const;
+    for (const a of axes) {
+      const target = (a.dims !== undefined ? a.dims : cmOrNull(row[a.dimsCol])) ?? cmOrNull(row[a.baseCol]);
+      if (a.sent !== undefined) {
+        if (a.sent && partsSum(a.sent) !== target) {
+          return c.json({ error: 'validation_failed', issues: [{ path: [a.path], message: PARTS_MISMATCH }] }, 400);
+        }
+        cols[a.col] = a.sent;
+      } else {
+        const saved = partsOrNull(row[a.col]);
+        if (saved && partsSum(saved) !== target) cols[a.col] = null;
       }
-      cols.length_parts = v.lengthParts;
-    } else {
-      const saved = partsOrNull(row.length_parts);
-      if (saved && partsSum(saved) !== target) cols.length_parts = null;
     }
   }
   // The sofa rules of an add need the piece's type, which the edit never changes.

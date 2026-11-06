@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { axisParts, partsLabel } from './sofa-dim-parts';
-import { layoutWidthParts } from './sofa-dim-parts';
+import { layoutAxisParts } from './sofa-dim-parts';
+import { cellsBbox } from '@2990s/shared';
+import { cellsFromComboModules } from './sofa-combo-cells';
 import { lengthText, partsFor } from '../components/marketing/marketing-model';
 
 describe('axisParts', () => {
@@ -34,9 +36,20 @@ describe('axisParts', () => {
   });
 });
 
-describe('layoutWidthParts', () => {
+describe('layoutAxisParts', () => {
   it('is empty for no cells', () => {
-    expect(layoutWidthParts([], 95 as never)).toEqual([]);
+    expect(layoutAxisParts([], 95 as never, 'x')).toEqual([]);
+    expect(layoutAxisParts([], 95 as never, 'y')).toEqual([]);
+  });
+
+  it('cuts an L-shape along both sides, each adding up to its box', () => {
+    // A corner sofa, like Lotti: the depth has a part too (YH 2026-11-06).
+    const cells = cellsFromComboModules([['1B(LHF)'], ['CNR'], ['2A(RHF)']], '24');
+    const box = cellsBbox(cells, '24')!;
+    const x = layoutAxisParts(cells, '24', 'x'), y = layoutAxisParts(cells, '24', 'y');
+    expect(y.length).toBeGreaterThanOrEqual(2);
+    expect(x.reduce((a, v) => a + v, 0)).toBe(Math.round(box.w));
+    expect(y.reduce((a, v) => a + v, 0)).toBe(Math.round(box.h));
   });
 });
 

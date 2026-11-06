@@ -10,12 +10,15 @@
 // new model going to three showrooms is three requests, the second and third
 // copies of the first.
 
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import type { Depth } from '@2990s/shared';
+import { layoutAxisParts } from '../../lib/sofa-dim-parts';
+import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import { TakePhoto } from './TakePhoto';
 import {
-  cmOf, compLine, hasPhoto, missingOf, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
-  saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, specOf, TYPES,
+  cmOf, compLine, hasPhoto, lengthText, missingOf, partsFor, partsTotal, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
+  saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, shownParts, specOf, TYPES,
   type DisplayItem, type DuplicateSource, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
@@ -25,7 +28,7 @@ import {
 import { ComponentBuilder, type BuiltSofa } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
-import { ShowPartsChoice } from './ShowPartsChoice';
+import { PartsRow, ShowPartsChoice } from './ShowPartsChoice';
 import s from './marketing.module.css';
 
 type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
@@ -187,12 +190,25 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
       else rows.push({ modules, layout, accessories, price: '' });
       patch({ rows });
     } else {
-      patch({ modules, layout, accessories, rows: d.rows.length ? d.rows : [{ modules, layout, accessories, price: '' }] });
+      // A new layout has new components: the typed parts no longer fit.
+      patch({ modules, layout, accessories, lengthParts: null, depthParts: null, rows: d.rows.length ? d.rows : [{ modules, layout, accessories, price: '' }] });
     }
     setBuilder(null);
   };
 
   const depth = seatDepth(d.seat);
+  /* YH 2026-11-06: the size typed one component at a time — each box starts at
+     that component's own size, and the length / width is their sum. */
+  const autoParts = useMemo(() => {
+    if (!d.modules.length) return { x: [], y: [] };
+    const cells = d.layout?.length ? d.layout : cellsFromComboModules(d.modules.map((m) => [m]), depth as Depth);
+    return { x: layoutAxisParts(cells, depth as Depth, 'x'), y: layoutAxisParts(cells, depth as Depth, 'y') };
+  }, [d.layout, d.modules, depth]);
+  const partsL = shownParts(d.lengthParts, autoParts.x), partsW = shownParts(d.depthParts, autoParts.y);
+  const typedL = partsFor(d.lengthParts, d.lengthCm), typedW = partsFor(d.depthParts, d.widthCm);
+  const dimsLabel = (typedL || typedW) && cmOf(d.lengthCm) && cmOf(d.widthCm)
+    ? { w: lengthText(cmOf(d.lengthCm)!, typedL, !!d.lengthShowParts), h: lengthText(cmOf(d.widthCm)!, typedW, !!d.lengthShowParts) }
+    : undefined;
   const art = opts.moduleArt;
 
   return (
@@ -322,6 +338,13 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     />
                     <span className={s.inchUnit}>cm</span>
                   </span>
+                  {partsL.length >= 2 && <PartsRow label="Length" parts={partsL}
+                    onChange={(p) => patch({ lengthParts: p, lengthCm: String(partsTotal(p) ?? d.lengthCm) })} />}
+                  {partsW.length >= 2 && <PartsRow label="Width" parts={partsW}
+                    onChange={(p) => patch({ depthParts: p, widthCm: String(partsTotal(p) ?? d.widthCm) })} />}
+                  {((d.lengthParts && !typedL) || (d.depthParts && !typedW)) && (
+                    <div className={s.refPhotoNote}>The components don't add up to the size, so only the size is saved.</div>
+                  )}
                 </div>
               )}
 
@@ -548,7 +571,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
               {isSofa && (
                 <>
                   <div className={s.previewPlain}>
-                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} dims showParts={!!d.lengthShowParts} />
+                    <SofaLayoutPreview layout={d.layout} pieces={d.accessories} pieceOptions={opts.sofaAccessoryById} modules={d.modules} depth={depth} art={art} dims dimsLabel={dimsLabel} showParts={!!d.lengthShowParts} />
                   </div>
                   <div className={s.previewShape}>{shapeName(d.modules)}</div>
                   {!!d.layout?.length && <ShowPartsChoice show={!!d.lengthShowParts} onChange={(v) => patch({ lengthShowParts: v })} />}

@@ -997,4 +997,28 @@ describe('length parts', () => {
     expect(back.status).toBe(200);
     expect(state.updated).toEqual({ dims_width_cm: null, dims_depth_cm: null }); // 120 + 100 = its length 220 again
   });
+
+  /* 0225 (YH 2026-11-06, an L-shape such as Lotti): the depth by component too. */
+  it('saves a request’s depth parts against its width, and refuses ones that do not add up', async () => {
+    meAnswers(MARKETING);
+    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], depth_parts: [60, 35] };
+    const res = await app().request('/marketing/requests', json('POST', { ...SOFA, widthCm: 95, depthParts: [60, 35] }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ width_cm: 95, depth_parts: [60, 35] });
+    expect((await res.json() as { request: Record<string, unknown> }).request).toMatchObject({ depthParts: [60, 35] });
+    state.inserted = null;
+    const bad = await app().request('/marketing/requests', json('POST', { ...SOFA, widthCm: 95, depthParts: [60, 30] }), env);
+    expect(bad.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('checks a display’s depth parts against its diagram depth', async () => {
+    meAnswers(MARKETING);
+    state.maybe = { id: DID, venue_id: '107', type: 'sofa', length_cm: 276, width_cm: 182, dims_width_cm: null, dims_depth_cm: null, length_parts: null, depth_parts: null };
+    const ok = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: 276, dimsDepthCm: 182, depthParts: [95, 87] }), env);
+    expect(ok.status).toBe(200);
+    expect(state.updated).toEqual({ dims_width_cm: 276, dims_depth_cm: 182, depth_parts: [95, 87] });
+    const bad = await app().request(`/marketing/displays/${DID}`, json('PATCH', { dimsWidthCm: 276, dimsDepthCm: 180, depthParts: [95, 87] }), env);
+    expect(bad.status).toBe(400);
+  });
 });

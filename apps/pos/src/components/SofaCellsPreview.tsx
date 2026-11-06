@@ -16,7 +16,7 @@ interface Props {
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
   /** Print these cm on the W / D lines instead of the computed size (Marketing's display-only override). */
-  dimsLabel?: { w: number | string; h: number };
+  dimsLabel?: { w: number | string; h: number | string };
   /** Write each dim as its parts, '188 + 110 = 298' (Marketing, YH 2026-11-06). */
   showParts?: boolean;
   /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
@@ -257,7 +257,10 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
             <span style={tickH} />
             <span style={lineV} />
             <span style={tickH} />
-            <span style={showParts && !dimsLabel ? dimLabelStacked : dimLabel}>{dimsLabel?.h ?? (showParts ? layoutDimParts(cells, depth, bb).h.replace(/ ([+=]) /g, '\n$1 ') : wholeCm(bb.h))}<span style={dimUnit}>cm</span></span>
+            {(() => {
+              const h = String(dimsLabel?.h ?? (showParts ? layoutDimParts(cells, depth, bb).h : wholeCm(bb.h)));
+              return <span style={h.includes('+') ? dimLabelStacked : dimLabel}>{h.replace(/ ([+=]) /g, '\n$1 ')}<span style={dimUnit}>cm</span></span>;
+            })()}
           </div>
         </>
       )}
