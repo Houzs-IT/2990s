@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
+import { TakePhoto } from './TakePhoto';
 import {
   cmOf, compLine, hasPhoto, missingOf, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
   saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, specOf, TYPES,
@@ -362,6 +363,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                 <div className={s.field}>
                   <span className={s.fieldLabel}>Photo<Req on={!hasPhoto(d)} /></span>
                   {!hasPhoto(d) ? (
+                    <>
                     <label className={s.planStrip}>
                       <span className={s.planStripIcon}><ImageUp size={20} strokeWidth={1.75} className={s.icon} /></span>
                       <span className={s.planStripText}>
@@ -371,6 +373,8 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                       <span className={s.planStripPill}>Upload</span>
                       <input type="file" accept="image/*" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
                     </label>
+                    <TakePhoto disabled={photoBusy} onFile={(e) => void onPhotoFile(e)} />
+                    </>
                   ) : (
                     <div className={s.photoCard}>
                       <button
@@ -407,6 +411,7 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                           <Upload size={16} strokeWidth={1.75} className={s.icon} />{photoBusy ? 'Preparing…' : 'Replace photo'}
                           <input type="file" accept="image/*" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
                         </label>
+                        <TakePhoto disabled={photoBusy} onFile={(e) => void onPhotoFile(e)} />
                       </div>
                     </div>
                   )}
