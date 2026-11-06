@@ -5,6 +5,7 @@
 
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
+import { TakePhoto } from './TakePhoto';
 import {
   detailRows, diagramSizeProblem, lengthText, moduleInfo, partsFor, partsOut, photoSourceOf, seatDepth, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
@@ -96,6 +97,7 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
                 <Upload size={13} strokeWidth={1.75} className={s.icon} />Replace
                 <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={busy} onChange={(e) => void onPhotoFile(e)} />
               </label>
+              <TakePhoto disabled={busy} onFile={(e) => void onPhotoFile(e)} />
               <button type="button" className={s.planRemove} disabled={busy} onClick={() => save({ ownPhoto: null }, 'Photo removed')}>Remove</button>
             </div>
           </>
@@ -110,6 +112,7 @@ const DisplayExtras = ({ it, toast }: { it: DisplayItem; toast: (t: string) => v
             <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={busy} onChange={(e) => void onPhotoFile(e)} />
           </label>
         )}
+        {!it.ownPhotoAt && <TakePhoto disabled={busy} onFile={(e) => void onPhotoFile(e)} />}
       </div>
       <div className={s.compsBlock}>
         <div className={s.compsTitle}>Remarks</div>

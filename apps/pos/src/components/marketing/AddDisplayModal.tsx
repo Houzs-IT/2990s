@@ -14,6 +14,7 @@
 
 import { useMemo, useState, type ChangeEvent } from 'react';
 import { ImageUp, X } from 'lucide-react';
+import { TakePhoto } from './TakePhoto';
 import {
   compLine, displayCopyFrom, seatDepth, shapeName, sizeName, specOf, TYPES,
   type DisplayCopy, type DisplayItem, type DisplayType, type DuplicateSource, type LaunchRequest, type PreparedImage, type SofaLayout,
@@ -397,6 +398,7 @@ export const AddDisplayModal = ({ showroom, opts, displays, requests, showrooms,
                     <input type="file" accept="image/png,image/jpeg" className={s.hiddenFile} disabled={photoBusy} onChange={(e) => void onPhotoFile(e)} />
                   </label>
                 )}
+                {!shownPhoto && <TakePhoto disabled={photoBusy} onFile={(e) => void onPhotoFile(e)} />}
               </div>
             </div>
 
