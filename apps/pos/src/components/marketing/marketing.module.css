@@ -1122,3 +1122,22 @@
   border: 1.5px solid var(--line); border-radius: 999px; background: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .takePhoto:hover { border-color: var(--c-burnt); color: var(--c-burnt); }
+
+/* ════════════════════════ phones (YH 2026-11-06) ════════════════════════
+   The tablet layouts keep two columns, which squeezed the form to a word a
+   line on a phone. Below 640px: one column, the whole dialog scrolls. */
+@media (max-width: 640px) {
+  .displayLayout, .board, .byProductGrid { grid-template-columns: minmax(0, 1fr); }
+  .modalScrim { padding: 8px; }
+  .modal { max-height: calc(100dvh - 16px); }
+  .modalHead { padding: 12px 16px; }
+  .modalGrid { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  .modalLeft, .modalRight { overflow: visible; padding: 16px; }
+  .modalRight { border-left: 0; border-top: 1px solid var(--line); }
+  .photoCard { grid-template-columns: minmax(0, 1fr); }
+  /* Two fields side by side overflow at this width (supplier code / model
+     name, showroom / Add-Replace): stack them. */
+  .twoCol { grid-template-columns: minmax(0, 1fr); }
+  .stepCard { flex-wrap: wrap; }
+  .stepThumb { width: 100%; }
+}
