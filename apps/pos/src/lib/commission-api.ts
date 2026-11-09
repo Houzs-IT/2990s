@@ -67,6 +67,8 @@ export interface CommissionKpiItem {
    *  percentage on the flagged portion. True = earn both, and the amount also
    *  still counts toward the RM 100k / RM 400k gates. */
   countsAsRevenue: boolean;
+  /** YYYY-MM-DD; the rule pays only on SOs dated on or after it. Null = always. */
+  effectiveFrom: string | null;
   active: boolean;
 }
 

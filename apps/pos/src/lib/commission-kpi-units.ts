@@ -36,6 +36,12 @@ import type { KpiUnit } from '@2990s/shared/hr-commission';
  *  from the sell-time vocabulary into the payroll one. */
 export const myrToCenti = (myr: number): number => Math.round(myr * 100);
 
+/** The rules in force for one SO: a rule with a start date applies only to an
+ *  SO dated on or after it; no start date = it always applied (migration 0226).
+ *  Applied before BOTH the bonus and the exclusion, so they cannot disagree. */
+export const flagsInForce = <F extends { effectiveFrom: string | null }>(flags: F[], soDate: string | null): F[] =>
+  flags.filter((f) => !f.effectiveFrom || (!!soDate && soDate.slice(0, 10) >= f.effectiveFrom));
+
 /** One SO item line, already normalised out of either backend's spelling. */
 export interface CommissionLine {
   itemCode: string;
