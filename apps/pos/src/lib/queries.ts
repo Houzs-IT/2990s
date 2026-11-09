@@ -2199,6 +2199,15 @@ export interface SalesStatsRow {
   personalProducts: number;
   personalService:  number;
   personalKpi:      number;
+  /** The caller's Team Directory team (Houzs `users.division`, ticket
+   *  2990-0045). ABSENT when they have none, or on an API without it — the
+   *  Team card shows only when `teamTotal` is here. */
+  teamName?:     string;
+  teamTotal?:    number;
+  teamCount?:    number;
+  teamProducts?: number;
+  teamService?:  number;
+  teamKpi?:      number;
   /** The showrooms and roadshow events the period's orders were sold at — the
    *  My-orders picker (lib/sales-place.ts). Absent on an API without the pick. */
   places?: SalesPlaceEntry[];
