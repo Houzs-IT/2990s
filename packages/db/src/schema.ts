@@ -3209,6 +3209,7 @@ export const hrItemKpi = pgTable('hr_item_kpi', {
   ref:        text('ref').notNull(),       // mfg_products.sku | fabric_library.id | special_addons.code
   label:      text('label').notNull().default(''),
   bonusCenti: integer('bonus_centi').notNull().default(0),
+  effectiveFrom: date('effective_from'),   // 0226 — null = always applied
   active:     boolean('active').notNull().default(true),
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

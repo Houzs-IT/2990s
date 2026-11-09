@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { unitKpiCenti, unitKpiExcludedCenti, type ItemKpiFlag } from '@2990s/shared/hr-commission';
-import { buildKpiUnits, myrToCenti, type CommissionLine, type UnitContext } from './commission-kpi-units';
+import { buildKpiUnits, flagsInForce, myrToCenti, type CommissionLine, type UnitContext } from './commission-kpi-units';
 
 const line = (over: Partial<CommissionLine> = {}): CommissionLine => ({
   itemCode: 'ANNSA-3S',
@@ -165,5 +165,30 @@ describe('end to end against the engine', () => {
     expect(unitKpiCenti(sofa(), flags)).toBe(5_000);
     expect(unitKpiExcludedCenti(sofa(), flags)).toBe(0);
     expect(sofa().lineTotalCenti - unitKpiExcludedCenti(sofa(), flags)).toBe(312_500);
+  });
+});
+
+describe('flagsInForce', () => {
+  /* 2990-0043, 9 Nov 2026: BROWNIE / KN rules added in November must pay from
+     October only. No period is ever closed, so without a start date every past
+     month picked them up. */
+  const brownie = { flagType: 'fabric' as const, ref: 'BROWNIE', bonusCenti: 25_000, countsAsRevenue: false, effectiveFrom: '2026-10-01' };
+  const d = { flagType: 'fabric' as const, ref: 'D', bonusCenti: 5_000, countsAsRevenue: false, effectiveFrom: null };
+  const unit = buildKpiUnits([line({ fabricId: 'BROWNIE' })], ctx()).units[0]!;
+  const bonusOn = (soDate: string | null) => unitKpiCenti(unit, flagsInForce([brownie], soDate));
+
+  it('pays nothing on a September SO for a rule that starts in October', () => {
+    expect(bonusOn('2026-09-30')).toBe(0);
+    expect(unitKpiExcludedCenti(unit, flagsInForce([brownie], '2026-09-30'))).toBe(0);
+  });
+
+  it('pays on an SO dated on or after the start', () => {
+    expect(bonusOn('2026-10-01')).toBe(25_000);
+    expect(bonusOn('2026-10-15T08:00:00+08:00')).toBe(25_000);
+  });
+
+  it('always applies a rule with no start date', () => {
+    expect(flagsInForce([d], '2026-08-01')).toEqual([d]);
+    expect(flagsInForce([d], null)).toEqual([d]);
   });
 });

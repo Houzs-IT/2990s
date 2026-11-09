@@ -275,7 +275,7 @@ commission.delete('/profiles/:id', async (c) => {
 
 /* ── item KPI rules ───────────────────────────────────────────────────────── */
 
-const ITEM_KPI_SELECT = 'id, flag_type, ref, label, bonus_centi, counts_as_revenue, active';
+const ITEM_KPI_SELECT = 'id, flag_type, ref, label, bonus_centi, counts_as_revenue, effective_from, active';
 
 const itemKpiToWire = (r: Record<string, unknown>) => ({
   id: String(r.id),
@@ -286,6 +286,8 @@ const itemKpiToWire = (r: Record<string, unknown>) => ({
   /* THE 2026-08-31 OPTION. False = the original rule (earn the fixed amount
      INSTEAD of the percentage on the flagged portion). True = earn both. */
   countsAsRevenue: Boolean(r.counts_as_revenue),
+  /* 0226 — YYYY-MM-DD or null (= always applied). */
+  effectiveFrom: (r.effective_from as string | null) ?? null,
   active: Boolean(r.active),
 });
 

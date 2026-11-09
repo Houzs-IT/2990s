@@ -43,7 +43,7 @@ import { fabricTierAddon, type FabricTier, type FabricTierModelOverride } from '
 import { resolveFabricTierOverride } from '@2990s/shared';
 import { authedFetch } from './apiClient';
 import { readMoney } from './houzs-money-keys';
-import { buildKpiUnits, type CommissionLine, type UnitContext } from './commission-kpi-units';
+import { buildKpiUnits, flagsInForce, type CommissionLine, type UnitContext } from './commission-kpi-units';
 import {
   useCommissionConfig, useCommissionKpiItems, useCommissionOverrideLevels,
   useCommissionProfiles, usePayoutPeriod,
@@ -181,10 +181,11 @@ export function useCommissionReport(from: string, to: string) {
   /* The line pass is only worth its requests when a KPI rule could actually
      fire. With no active rule the bonus is 0 and the exclusion is 0 for every
      unit, so the whole month of item reads is skipped. */
-  const activeFlags: ItemKpiFlag[] = useMemo(
-    () => (kpiQ.data ?? []).filter((k) => k.active).map(toFlag),
+  const activeItems: CommissionKpiItem[] = useMemo(
+    () => (kpiQ.data ?? []).filter((k) => k.active),
     [kpiQ.data],
   );
+  const activeFlags: ItemKpiFlag[] = useMemo(() => activeItems.map(toFlag), [activeItems]);
   const needLines = activeFlags.length > 0 && docNos.length > 0;
   const lineQs = useSoLines(docNos, needLines);
   const linesLoading = needLines && lineQs.some((q) => q.isLoading || q.isFetching);
@@ -232,6 +233,7 @@ export function useCommissionReport(from: string, to: string) {
 
     if (activeFlags.length > 0) {
       const salespersonOf = new Map(orders.map((o) => [o.docNo, o.salespersonId]));
+      const soDateOf = new Map(orders.map((o) => [o.docNo, o.soDate]));
       const labelOf = new Map((kpiQ.data ?? []).map((k) => [`${k.flagType}:${k.ref}`, k.label || k.ref]));
 
       for (const q of lineQs) {
@@ -239,19 +241,21 @@ export function useCommissionReport(from: string, to: string) {
         if (!payload) continue;
         const sp = salespersonOf.get(payload.docNo);
         if (!sp) continue;
+        const flags = flagsInForce(activeItems, soDateOf.get(payload.docNo) ?? null).map(toFlag);
+        if (flags.length === 0) continue;
         const { units, unresolvedFabric } = buildKpiUnits(payload.lines, ctx);
         unresolvedFabric.forEach((c) => unresolved.add(c));
 
         for (const u of units) {
-          const bonus = unitKpiCenti(u, activeFlags);
-          const excluded = unitKpiExcludedCenti(u, activeFlags);
+          const bonus = unitKpiCenti(u, flags);
+          const excluded = unitKpiExcludedCenti(u, flags);
           if (bonus > 0) bonusByStaff.set(sp, (bonusByStaff.get(sp) ?? 0) + bonus);
           if (excluded > 0) excludedByStaff.set(sp, (excludedByStaff.get(sp) ?? 0) + excluded);
           if (bonus <= 0) continue;
           /* firingFlags, not the raw list: a category rule suppressed by a
              product rule paid nothing, so it must not appear in a breakdown
              that has to sum back to `bonus`. */
-          for (const f of firingFlags(u, activeFlags)) {
+          for (const f of firingFlags(u, flags)) {
             const key = `${f.flagType}:${f.ref}`;
             const m = detailByStaff.get(sp) ?? new Map<string, DetailAcc>();
             const prev: DetailAcc = m.get(key) ?? {
@@ -383,7 +387,7 @@ export function useCommissionReport(from: string, to: string) {
   }, [
     isLoading, error, configQ.data, profilesQ.data, kpiQ.data, levelsQ.data,
     revenueQ.data, catalogQ.data, fabricsQ.data, addonCfgQ.data, modelOvrQ.data,
-    compOvrQ.data, activeFlags, orders, from, to,
+    compOvrQ.data, activeItems, activeFlags, orders, from, to,
   ]);
 
   return { report, closed: closedQ.data ?? null, isLoading, error };

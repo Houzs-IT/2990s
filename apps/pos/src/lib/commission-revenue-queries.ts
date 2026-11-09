@@ -30,6 +30,8 @@ export interface CommissionOrder {
   /** Goods before the item-KPI exclusion. 0 when the per-category columns were
    *  finance-gated for this reader — read `goodsKnown` on the fold, not this. */
   goodsCenti: number;
+  /** YYYY-MM-DD — decides which item-KPI rules were in force (effectiveFrom). */
+  soDate: string | null;
 }
 
 export interface CommissionRevenue {
@@ -85,6 +87,7 @@ export function useCommissionRevenue(from: string, to: string) {
           salespersonId: sp,
           goodsCenti: ['mattress_sofa', 'bedframe', 'accessories', 'others']
             .reduce((s2, base) => s2 + readMoney(r, base), 0),
+          soDate: typeof r.so_date === 'string' ? r.so_date.slice(0, 10) : null,
         });
       }
       return { byStaff: foldSoRevenue(rows), orders, truncated };
