@@ -176,6 +176,10 @@
   margin-bottom: var(--space-5);
 }
 
+.kpis.kpisThree { grid-template-columns: 1fr 1fr 1fr; }
+/* Tablet: three breakdowns side by side are too narrow; Team wraps below. */
+@media (max-width: 1099px) { .kpis.kpisThree { grid-template-columns: 1fr 1fr; } }
+
 .kpiMobile { display: none; }
 
 .kpiCard {

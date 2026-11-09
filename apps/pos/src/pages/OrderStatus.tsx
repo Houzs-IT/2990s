@@ -1267,7 +1267,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
 /* ─── Sales KPIs (2 cards above the board) ─── */
 
-const SalesKpis = ({
+export const SalesKpis = ({
   stats,
   /** Whose figures the Personal card holds — the filtered salesperson when one
    *  is picked, otherwise the viewer. Not always the logged-in user. */
@@ -1310,9 +1310,20 @@ const SalesKpis = ({
       service: data?.showroomService ?? 0,
       kpi: data?.showroomKpi ?? 0,
     },
+    ...(data?.teamTotal != null ? [{
+      id: 'team',
+      label: 'Team',
+      note: data.teamName ?? 'Team',
+      Icon: Users,
+      total: data.teamTotal,
+      count: data.teamCount ?? 0,
+      products: data.teamProducts ?? 0,
+      service: data.teamService ?? 0,
+      kpi: data.teamKpi ?? 0,
+    }] : []),
   ];
   return (
-    <section className={styles.kpis} aria-label={`Sales · ${at}${monthLabel}`}>
+    <section className={`${styles.kpis} ${data?.teamTotal != null ? styles.kpisThree : ''}`} aria-label={`Sales · ${at}${monthLabel}`}>
       <div className={styles.kpiMobile}>
         <div className={styles.kpiMobilePeriod}>
           <strong>{monthLabel || '—'}</strong>
@@ -1399,6 +1410,28 @@ const SalesKpis = ({
           </>
         )}
       </div>
+
+      {data?.teamTotal != null && (
+        <div className={styles.kpiCard}>
+          <div className={styles.kpiHead}>
+            <Users size={13} strokeWidth={1.75} />
+            {data.teamName ?? 'Team'} · {at}{monthLabel || '—'}
+          </div>
+          <div className={styles.kpiNum}>
+            <span className={styles.kpiUnit}>RM</span>
+            {fmtMoney(data.teamTotal)}
+          </div>
+          <div className={styles.kpiDelta}>
+            <Receipt size={12} strokeWidth={1.75} />
+            {data.teamCount ?? 0} {(data.teamCount ?? 0) === 1 ? 'order' : 'orders'}
+          </div>
+          <KpiBreakdown
+            products={data.teamProducts ?? 0}
+            service={data.teamService ?? 0}
+            kpi={data.teamKpi ?? 0}
+          />
+        </div>
+      )}
     </section>
   );
 };
