@@ -93,15 +93,15 @@ BEGIN
   GET DIAGNOSTICS n = ROW_COUNT;
   INSERT INTO kn_repair_log VALUES ('marketing_displays', n, 'the 4 rows by id');
 
-  -- 2. Launch requests: a row whose code disagrees with its colour now, and
-  --    agrees once moved forward two steps.
-  UPDATE public.marketing_launch_requests r SET fabric = f.orig_code
-    FROM kn_fix f
-   WHERE r.fabric = f.now_code
-     AND lower(trim(r.colour)) = lower(f.orig_colour)
-     AND NOT EXISTS (SELECT 1 FROM kn_orig o WHERE o.code = r.fabric AND lower(o.colour) = lower(trim(r.colour)));
+  -- 2. Launch requests: a KN row whose code disagrees with its colour gets the
+  --    original code for that colour (covers one or two steps off).
+  UPDATE public.marketing_launch_requests r SET fabric = o.code
+    FROM kn_orig o
+   WHERE r.fabric ~ '^KN(0[1-9]|1[0-3])$'
+     AND lower(trim(r.colour)) = lower(o.colour)
+     AND r.fabric <> o.code;
   GET DIAGNOSTICS n = ROW_COUNT;
-  INSERT INTO kn_repair_log VALUES ('marketing_launch_requests', n, 'moved where the colour then matches');
+  INSERT INTO kn_repair_log VALUES ('marketing_launch_requests', n, 'set to the original code for its colour');
 
   -- 3. hr_item_kpi: every KN row (all made before 12 Nov — checked above).
   --    ref is the code; label moves too where it IS the code. One statement,
