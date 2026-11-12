@@ -8,7 +8,7 @@
 -- One row per distinct text: table, column, the text (for json, the 40
 -- characters either side of the code), how many rows hold it, and the
 -- document numbers (the row's own doc_no, else its parent's through a foreign
--- key, else the row id; at most 20 listed).
+-- key, else the row's primary key; at most 20 listed).
 
 WITH mode AS (
   SELECT CASE WHEN to_regclass('public.campaign_promos') IS NOT NULL THEN 'public' ELSE 'scm' END AS sch,
@@ -37,7 +37,15 @@ cols AS (
            WHERE con.contype = 'f' AND cardinality(con.conkey) = 1
              AND con.conrelid = to_regclass(format('%I.%I', m.sch, w.tbl))
              AND EXISTS (SELECT 1 FROM pg_attribute d WHERE d.attrelid = con.confrelid AND d.attname = 'doc_no' AND NOT d.attisdropped)
-           ORDER BY con.conname LIMIT 1) AS parent_join
+           ORDER BY con.conname LIMIT 1) AS parent_join,
+         -- the table's own primary key, read from the live catalog (not every table has an id:
+         -- mrp_snapshots / mrp_list_snapshots are keyed by company_id); ctid if it has none
+         coalesce((SELECT string_agg(format('x.%I::text', a.attname), $s$ || '/' || $s$ ORDER BY k.ord)
+                     FROM pg_index i
+                     CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                     JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                    WHERE i.indrelid = to_regclass(format('%I.%I', m.sch, w.tbl)) AND i.indisprimary),
+                  'x.ctid::text') AS pk_doc
     FROM want w CROSS JOIN mode m
     JOIN information_schema.columns c ON c.table_schema = m.sch AND c.table_name = w.tbl AND c.column_name = w.col
 ),
@@ -49,7 +57,7 @@ q AS (
      GROUP BY val$f$,
       CASE WHEN own_doc IS NOT NULL THEN format('x.%I::text', own_doc)
            WHEN parent_join IS NOT NULL THEN 'p.doc_no::text'
-           ELSE 'x.id::text' END,
+           ELSE pk_doc END,
       CASE WHEN is_json
            THEN format($v$substring(regexp_replace(x.%I::text, '"KN(0[1-9]|1[0-3])"', '"·"', 'g') FROM '.{0,40}\mKN-?(?:0[1-9]|1[0-3])\M.{0,40}')$v$, col)
            ELSE format('x.%I', col) END,
