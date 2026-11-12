@@ -15,9 +15,11 @@
 -- rewrites ONLY the columns on the reviewed list below, and REFUSES (rolls
 -- back, changes nothing) while any other column holds a KN01..KN13 value.
 --
--- What it rewrites: whole values only — a text column equal to 'KN01', a json
--- string "KN01" (value or key), an array element 'KN01'. Free text
--- ("FABRIC KN-12", remarks) stays as printed, unless the SWITCH below is 'on'.
+-- What it rewrites: whole values — a text column equal to 'KN01', a json
+-- string "KN01" (value or key), an array element 'KN01' — and, while the
+-- SWITCH below is 'on' (the default), the codes inside free text on the
+-- order lines and their snapshots. History stays as printed: the SO audit log
+-- and the scanned-paper tables are never touched.
 -- Houzs: company 2 rows only. 2990s: every row (single company).
 --
 -- How: one transaction, two passes (KNxx → zzKNRENUMxx → new KNxx), so the
@@ -29,14 +31,17 @@
 BEGIN;
 
 -- ═══════════════════════════════ SWITCH ════════════════════════════════
--- 'off' (default): description2 keeps its text as printed.
--- 'on': ALSO renumber KN codes inside description2 on the four Houzs item
---       tables (SO / PO / consignment order / consignment receive lines),
---       company 2 only, whole tokens only ("KN01", "KN-01"; never "KN013",
---       "KN01A"). Read step 1b's output before turning it on: a supplier code
---       such as "(KN10-2)" WOULD be renumbered too.
+-- 'on' (default — YH 12 Nov, after reading step 1b: old orders show the new
+--       code): ALSO renumber KN codes inside the free text listed in kn_free
+--       below — description2 and the text inside the json (a "summary" of
+--       "EMBRACE/KN07 Sand", an MRP "variantLabel" of "KN07 Sand / SEAT 28").
+--       Houzs, company 2 only, whole tokens only ("KN01", "KN-01"; never
+--       "KN013", "KN01A"). A supplier code such as "(KN10-2)" WOULD be
+--       renumbered too; step 1b found none on 12 Nov.
+-- 'off': free text keeps the old code as printed; only whole values move.
+-- The rollback must use the same setting.
 CREATE TEMP TABLE kn_switch ON COMMIT DROP AS
-SELECT 'off'::text AS renumber_description2;   -- ← 'off' or 'on'
+SELECT 'on'::text AS renumber_free_text;   -- ← 'on' or 'off'
 -- ═══════════════════════════════════════════════════════════════════════
 
 CREATE TEMP TABLE kn_map (old_code text PRIMARY KEY, new_code text UNIQUE, colour text) ON COMMIT DROP;
@@ -71,10 +76,15 @@ INSERT INTO kn_target VALUES
   ('2990s','hr_item_kpi','ref'),            ('2990s','hr_item_kpi','label'),
   ('2990s','marketing_displays','fabric'),  ('2990s','marketing_launch_requests','fabric');
 
--- description2 (only when the switch is 'on'): Houzs, these four tables.
-CREATE TEMP TABLE kn_desc2 (tbl text) ON COMMIT DROP;
-INSERT INTO kn_desc2 VALUES ('mfg_sales_order_items'), ('purchase_order_items'),
-  ('purchase_consignment_order_items'), ('purchase_consignment_receive_items');
+-- Free text (only when the switch is 'on'): Houzs, these columns. Not the SO
+-- audit log, scan_jobs or so_scan_samples — those are history, kept as printed.
+CREATE TEMP TABLE kn_free (tbl text, col text) ON COMMIT DROP;
+INSERT INTO kn_free VALUES
+  ('mfg_sales_order_items','description2'), ('purchase_order_items','description2'),
+  ('purchase_consignment_order_items','description2'), ('purchase_consignment_receive_items','description2'),
+  ('mfg_sales_order_items','variants'), ('purchase_order_items','variants'),
+  ('purchase_consignment_order_items','variants'), ('purchase_consignment_receive_items','variants'),
+  ('so_revisions','snapshot'), ('mrp_snapshots','result'), ('mrp_list_snapshots','result');
 
 DROP TABLE IF EXISTS kn_log;
 CREATE TEMP TABLE kn_log (tbl text, col text, kind text, row_updates int, note text);  -- a json row holding 3 codes counts 3
@@ -86,7 +96,7 @@ DECLARE
   sch text   := CASE WHEN is2990 THEN 'public' ELSE 'scm' END;
   co  bigint := CASE WHEN is2990 THEN NULL ELSE 2 END;
   r record; m record; pass int; n int; total int; scope text; unlisted text := '';
-  desc2_on boolean := (SELECT renumber_description2 = 'on' FROM kn_switch);
+  free_on boolean := (SELECT renumber_free_text = 'on' FROM kn_switch);
   codes text := '''KN01'',''KN02'',''KN03'',''KN04'',''KN05'',''KN06'',''KN07'',''KN08'',''KN09'',''KN10'',''KN11'',''KN12'',''KN13''';
 BEGIN
   IF NOT is2990 AND to_regnamespace('scm') IS NULL THEN
@@ -176,20 +186,23 @@ BEGIN
       IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, r.col, r.kind, total, NULL); END IF;
     END LOOP;
 
-    -- The switch: description2, whole tokens, keeping the "KN-01" / "KN01" form.
-    IF desc2_on AND co IS NOT NULL THEN
-      FOR r IN SELECT d.tbl FROM kn_desc2 d JOIN kn_cols c ON c.tbl = d.tbl AND c.col = 'description2' AND c.has_co LOOP
+    -- The switch: free text, whole tokens, keeping the "KN-01" / "KN01" form.
+    -- Runs after the whole-value pass above, so a quoted "KN07" is already a
+    -- zzKNRENUM token and is not changed twice. Only letters and digits are
+    -- swapped, so the json stays valid.
+    IF free_on AND co IS NOT NULL THEN
+      FOR r IN SELECT c.* FROM kn_free d JOIN kn_cols c ON c.tbl = d.tbl AND c.col = d.col AND c.has_co LOOP
         total := 0;
         FOR m IN SELECT CASE pass WHEN 1 THEN 'KN' ELSE 'zzKNRENUM' END || '(-?)' ||
                         substr(CASE pass WHEN 1 THEN old_code ELSE new_code END, 3) AS f,
                         CASE pass WHEN 1 THEN 'zzKNRENUM' ELSE 'KN' END || '\1' || substr(new_code, 3) AS t
                    FROM kn_map LOOP
-          EXECUTE format('UPDATE %I.%I SET description2 = regexp_replace(description2, %L, %L, ''g'') WHERE description2 ~ %L AND company_id = %s',
-                         sch, r.tbl, '\m' || m.f || '\M', m.t, '\m' || m.f || '\M', co);
+          EXECUTE format('UPDATE %I.%I SET %I = regexp_replace(%I::text, %L, %L, ''g'')::%s WHERE %I::text ~ %L AND company_id = %s',
+                         sch, r.tbl, r.col, r.col, '\m' || m.f || '\M', m.t, r.kind, r.col, '\m' || m.f || '\M', co);
           GET DIAGNOSTICS n = ROW_COUNT;
           total := total + n;
         END LOOP;
-        IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, 'description2', 'free text (switch on)', total, NULL); END IF;
+        IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, r.col, 'free text (switch on)', total, NULL); END IF;
       END LOOP;
     END IF;
   END LOOP;

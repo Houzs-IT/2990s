@@ -2,7 +2,7 @@
 --
 -- Prints the free text that mentions a KN01..KN13 code ("FABRIC KN-12 / SEAT
 -- 18", "KN13 Rosewood"), so a person can decide whether step 2's
--- description2 SWITCH should be on. Houzs: company 2 rows only. 2990s: no
+-- free-text SWITCH should be on. Houzs: company 2 rows only. 2990s: no
 -- such columns, so it returns nothing there.
 --
 -- One row per distinct text: table, column, the text (for json, the 40
