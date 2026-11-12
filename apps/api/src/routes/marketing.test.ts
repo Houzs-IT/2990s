@@ -9,6 +9,8 @@ import type { Env, Variables } from '../env';
 type Answer = {
   single?: Record<string, unknown> | null;
   maybe?: Record<string, unknown> | null;
+  /** Answers for successive single-row reads of the table, used up in order before `maybe`. */
+  maybes?: Array<Record<string, unknown> | null>;
   list?: Record<string, unknown>[];
   /** Lists for successive list reads of the table, used up in order before `list`. */
   lists?: Record<string, unknown>[][];
@@ -25,7 +27,10 @@ const state = vi.hoisted(() => ({
   tables: {} as Record<string, Answer>,
   rpcResult: null as unknown,
   rpcError: null as { message: string } | null,
+  /** The row inserted — the first, when a list of rows went in at once. */
   inserted: null as Record<string, unknown> | null,
+  /** Every row of the last insert: a launch request goes in as a list, one row per showroom. */
+  insertedAll: [] as Record<string, unknown>[],
   updated: null as Record<string, unknown> | null,
   lastRpc: null as { fn: string; args: Record<string, unknown> } | null,
   orFilter: null as string | null,
@@ -42,11 +47,18 @@ vi.mock('@supabase/supabase-js', () => ({
       const obj: any = {};
       for (const m of ['select', 'order', 'eq', 'is', 'in', 'delete']) obj[m] = () => obj;
       obj.or = (f: string) => { state.orFilter = f; return obj; };
-      obj.insert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
+      obj.insert = (p: Record<string, unknown> | Record<string, unknown>[]) => {
+        state.insertedAll = Array.isArray(p) ? p : [p];
+        state.inserted = state.insertedAll[0] ?? null;
+        return obj;
+      };
       obj.update = (p: Record<string, unknown>) => { state.updated = p; return obj; };
       obj.upsert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
       obj.single = async () => ({ data: pick('single', state.single), error: pick('error', state.error) });
-      obj.maybeSingle = async () => ({ data: pick('maybe', state.maybe), error: pick('error', state.error) });
+      obj.maybeSingle = async () => {
+        const queued = own().maybes;
+        return { data: queued?.length ? queued.shift() : pick('maybe', state.maybe), error: pick('error', state.error) };
+      };
       obj.then = (resolve: any) => {
         const next = own().lists?.shift();
         return resolve({ data: next ?? pick('list', state.list), error: pick('error', state.error), count: pick('count', 0) });
@@ -94,7 +106,7 @@ beforeEach(() => {
   state.single = null; state.maybe = null; state.list = []; state.error = null;
   // Every write files under a showroom; by default it is a listed one.
   state.tables = { marketing_showrooms: { maybe: { id: '107' } } };
-  state.rpcResult = null; state.rpcError = null; state.inserted = null; state.updated = null; state.lastRpc = null;
+  state.rpcResult = null; state.rpcError = null; state.inserted = null; state.insertedAll = []; state.updated = null; state.lastRpc = null;
   state.orFilter = null; state.reads = [];
 });
 
@@ -520,7 +532,7 @@ describe('launch requests', () => {
 
   it('saves a pending sofa and snapshots who asked', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const res = await app().request('/marketing/requests', json('POST', base), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ requested_by: '41', requested_by_name: 'Marketing', requested_by_role: 'Marketing', completed_at: null });
@@ -551,14 +563,14 @@ describe('launch requests', () => {
     meAnswers(MARKETING);
     const bare = await app().request('/marketing/requests', json('POST', { type: 'mattress', status: 'pending', venueId: '107', action: 'add' }), env);
     expect((await bare.json() as { missing: string[] }).missing).toEqual(['Supplier code']);
-    state.single = { id: 'r2', type: 'bedframe', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r2', type: 'bedframe', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const ok = await app().request('/marketing/requests', json('POST', { type: 'bedframe', status: 'pending', venueId: '107', action: 'add', supplierCode: 'BF-9' }), env);
     expect(ok.status).toBe(201);
   });
 
   it('writes the size, category, function and photo with the request in one insert', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const res = await app().request('/marketing/requests', json('POST', { ...base, photoNote: 'kept only for Non-exact' }), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({
@@ -578,10 +590,10 @@ describe('launch requests', () => {
 
   it('never puts the photo itself on the wire of a request', async () => {
     meAnswers(MARKETING);
-    state.single = {
+    state.list = [{
       id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [],
       photo_b64: PNG, photo_updated_at: '2026-10-09T03:00:00.000Z', photo_match: 'exact', length_cm: 220, width_cm: 95,
-    };
+    }];
     const res = await app().request('/marketing/requests', json('POST', base), env);
     const body = await res.json() as { request: Record<string, unknown> };
     expect(JSON.stringify(body)).not.toContain(PNG);
@@ -632,9 +644,145 @@ describe('launch requests', () => {
     expect(res.status).toBe(409);
   });
 
+  /* owner 2026-11-12: a new product can go to several showrooms at once. It is
+     one request for each showroom, all of them written by a single insert. */
+  describe('several showrooms at once', () => {
+    const D1 = '6f1f6c1e-0000-4000-8000-0000000000d1';
+    const D2 = '6f1f6c1e-0000-4000-8000-0000000000d2';
+    // The product alone: where it goes is named in `destinations` instead.
+    const product = { ...base, venueId: undefined };
+    const row = (id: string, venue: string) => ({ id, type: 'sofa', status: 'pending', venue_id: venue, action: 'add', combo_rows: [], modules: [] });
+    const post = (body: unknown) => app().request('/marketing/requests', json('POST', body), env);
+
+    it('files one request for each showroom in a single insert, each with its own copy of the photo', async () => {
+      meAnswers(MARKETING);
+      state.tables.marketing_launch_requests = { list: [row('r1', '107'), row('r2', '108')] };
+      const res = await post({ ...product, destinations: [{ venueId: '107' }, { venueId: '108' }] });
+      expect(res.status).toBe(201);
+      expect(state.insertedAll.map((r) => r.venue_id)).toEqual(['107', '108']);
+      for (const r of state.insertedAll) {
+        expect(r).toMatchObject({
+          supplier_code: 'SL-2207', action: 'add', replace_display_id: null, photo_b64: PNG,
+          requested_by: '41', requested_by_name: 'Marketing', completed_at: null,
+        });
+      }
+      // One write for both rows: they are filed together or not at all.
+      expect(state.reads.filter((t) => t === 'marketing_launch_requests')).toHaveLength(1);
+      const body = await res.json() as { request: { id: string }; requests: Array<{ id: string; venueId: string }> };
+      expect(body.requests.map((r) => [r.id, r.venueId])).toEqual([['r1', '107'], ['r2', '108']]);
+      expect(body.request.id).toBe('r1');
+      expect(JSON.stringify(body)).not.toContain(PNG);
+    });
+
+    it('still takes one showroom the way it always has, and answers with it both ways', async () => {
+      meAnswers(MARKETING);
+      state.list = [row('r1', '107')];
+      const res = await post(base);
+      expect(res.status).toBe(201);
+      expect(state.insertedAll).toHaveLength(1);
+      expect(state.inserted).toMatchObject({ venue_id: '107' });
+      const body = await res.json() as { request: { id: string }; requests: Array<{ id: string }> };
+      expect(body.request.id).toBe('r1');
+      expect(body.requests.map((r) => r.id)).toEqual(['r1']);
+    });
+
+    it('writes each showroom’s own piece to replace', async () => {
+      meAnswers(MARKETING);
+      state.tables.marketing_displays = {
+        maybes: [
+          { id: D1, venue_id: '107', type: 'sofa', removed_at: null },
+          { id: D2, venue_id: '108', type: 'sofa', removed_at: null },
+        ],
+      };
+      state.tables.marketing_launch_requests = { list: [row('r1', '107'), row('r2', '108')] };
+      const res = await post({
+        ...product, action: 'replace', destinations: [{ venueId: '107', replaceId: D1 }, { venueId: '108', replaceId: D2 }],
+      });
+      expect(res.status).toBe(201);
+      expect(state.insertedAll.map((r) => [r.venue_id, r.replace_display_id])).toEqual([['107', D1], ['108', D2]]);
+    });
+
+    it('files none of them when one showroom’s piece to replace is on another showroom’s floor', async () => {
+      meAnswers(MARKETING);
+      state.maybe = { id: D1, venue_id: '107', type: 'sofa', removed_at: null };
+      const res = await post({
+        ...product, action: 'replace', destinations: [{ venueId: '107', replaceId: D1 }, { venueId: '108', replaceId: D1 }],
+      });
+      expect(res.status).toBe(409);
+      expect(state.inserted).toBeNull();
+    });
+
+    it('will not complete a Replace until every showroom has its piece, but saves it as pending', async () => {
+      meAnswers(MARKETING);
+      state.maybe = { id: D1, venue_id: '107', type: 'sofa', removed_at: null };
+      const destinations = [{ venueId: '107', replaceId: D1 }, { venueId: '108' }];
+      const done = await post({ ...product, status: 'completed', action: 'replace', destinations });
+      expect(done.status).toBe(409);
+      expect(await done.json()).toEqual({ error: 'invalid_replace', reason: 'Choose the piece this replaces.' });
+      expect(state.inserted).toBeNull();
+      state.tables.marketing_launch_requests = { list: [row('r1', '107'), row('r2', '108')] };
+      const pending = await post({ ...product, action: 'replace', destinations });
+      expect(pending.status).toBe(201);
+      expect(state.insertedAll.map((r) => r.replace_display_id)).toEqual([D1, null]);
+    });
+
+    it('files none of them when one of the showrooms is no longer listed', async () => {
+      meAnswers(MARKETING);
+      state.tables.marketing_showrooms = { maybes: [{ id: '107' }], maybe: null };
+      const res = await post({ ...product, destinations: [{ venueId: '107' }, { venueId: 'gone' }] });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'unknown_showroom', reason: 'One of these showrooms is no longer on the list.' });
+      expect(state.inserted).toBeNull();
+    });
+
+    it('refuses a showroom named twice, no showroom at all, or more than a save may name', async () => {
+      meAnswers(MARKETING);
+      const tooMany = Array.from({ length: 21 }, (_, i) => ({ venueId: `v${i}` }));
+      for (const destinations of [[{ venueId: '107' }, { venueId: '107' }], [], tooMany]) {
+        const res = await post({ ...product, destinations });
+        expect(res.status).toBe(400);
+      }
+      expect((await post(product)).status).toBe(400);
+      expect(state.inserted).toBeNull();
+    });
+
+    it('refuses a photo too large to copy to that many showrooms', async () => {
+      meAnswers(MARKETING);
+      // Exactly 1 MB of photo: twelve copies are the 12 MB one save may write, thirteen are over.
+      const photo = { contentType: 'image/jpeg', dataB64: `${'A'.repeat(Math.ceil((1024 * 1024) / 3) * 4 - 2)}==`, fileName: 'big.jpg' };
+      const to = (n: number) => Array.from({ length: n }, (_, i) => ({ venueId: `v${i}` }));
+      const over = await post({ ...product, photo, destinations: to(13) });
+      expect(over.status).toBe(413);
+      expect((await over.json() as { reason: string }).reason)
+        .toBe('This photo is too large to file for 13 showrooms at once. Choose fewer showrooms, or a smaller photo.');
+      expect(state.inserted).toBeNull();
+      state.tables.marketing_launch_requests = { list: to(12).map((d, i) => row(`r${i}`, d.venueId)) };
+      const fits = await post({ ...product, photo, destinations: to(12) });
+      expect(fits.status).toBe(201);
+      expect(state.insertedAll).toHaveLength(12);
+    });
+
+    it('keeps a saved request to one showroom', async () => {
+      meAnswers(MARKETING);
+      state.tables.marketing_launch_requests = {
+        maybe: { id: RID, type: 'sofa', status: 'pending', venue_id: '108', action: 'add', combo_rows: [], modules: [], photo_updated_at: '2026-10-09T03:00:00.000Z' },
+      };
+      const several = await app().request(`/marketing/requests/${RID}`, json('PUT', {
+        ...product, destinations: [{ venueId: '107' }, { venueId: '108' }],
+      }), env);
+      expect(several.status).toBe(400);
+      expect((await several.json() as { reason: string }).reason).toBe('A saved request goes to one showroom.');
+      expect(state.updated).toBeNull();
+      // One showroom named the new way is still that request's own edit.
+      const one = await app().request(`/marketing/requests/${RID}`, json('PUT', { ...product, photo: undefined, destinations: [{ venueId: '108' }] }), env);
+      expect(one.status).toBe(200);
+      expect(state.updated).toMatchObject({ venue_id: '108' });
+    });
+  });
+
   it('keeps an untyped combo price as null, not zero', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', modules: [], combo_rows: [{ modules: ['2A(LHF)'], price: null }] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', modules: [], combo_rows: [{ modules: ['2A(LHF)'], price: null }] }];
     const res = await app().request('/marketing/requests', json('POST', { ...base, rows: [{ modules: ['2A(LHF)'], price: null }] }), env);
     const body = await res.json() as { request: { rows: unknown[] } };
     expect(body.request.rows).toEqual([{ modules: ['2A(LHF)'], price: null, layout: null, accessories: null }]);
@@ -648,7 +796,7 @@ describe('launch requests', () => {
 
   it('stores the layout, and each combo’s, as laid out', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const res = await app().request('/marketing/requests', json('POST', {
       ...base, modules: ['2A(LHF)', 'L(RHF)'], layout: LAYOUT,
       rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: 3540, layout: LAYOUT }],
@@ -687,7 +835,7 @@ describe('launch requests', () => {
 
   it('stores the pieces on a request and its combos, dropping one off the layout', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], layout: LAYOUT, accessories: PIECES };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], layout: LAYOUT, accessories: PIECES }];
     const stray = { id: 'p9', modelId: 'acc-back', cellId: 'gone', slot: 1 };
     const res = await app().request('/marketing/requests', json('POST', {
       ...base, modules: ['2A(LHF)', 'L(RHF)'], layout: LAYOUT, accessories: [...PIECES, stray],
@@ -700,7 +848,7 @@ describe('launch requests', () => {
 
   it('keeps no pieces without a layout, and refuses a malformed one', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     await app().request('/marketing/requests', json('POST', { ...base, accessories: PIECES }), env);
     expect(state.inserted).toMatchObject({ accessories: null });
     state.inserted = null;
@@ -925,10 +1073,10 @@ describe('length parts', () => {
 
   it('saves a request’s parts and their choice, and gives them back on the wire', async () => {
     meAnswers(MARKETING);
-    state.single = {
+    state.list = [{
       id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [],
       length_cm: 220, width_cm: 95, length_parts: [120, 100], length_show_parts: true,
-    };
+    }];
     const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthParts: [120, 100], lengthShowParts: true }), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ length_cm: 220, length_parts: [120, 100], length_show_parts: true });
@@ -938,7 +1086,7 @@ describe('length parts', () => {
 
   it('saves "show as x + y" with no typed parts: the POS works them out from the layout', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthShowParts: true }), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ length_parts: null, length_show_parts: true });
@@ -946,7 +1094,7 @@ describe('length parts', () => {
 
   it('works the length out from the parts when none is sent', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [] }];
     const res = await app().request('/marketing/requests', json('POST', { ...SOFA, lengthCm: null, lengthParts: [150, 90] }), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ length_cm: 240, length_parts: [150, 90], length_show_parts: false });
@@ -1001,7 +1149,7 @@ describe('length parts', () => {
   /* 0225 (YH 2026-11-06, an L-shape such as Lotti): the depth by component too. */
   it('saves a request’s depth parts against its width, and refuses ones that do not add up', async () => {
     meAnswers(MARKETING);
-    state.single = { id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], depth_parts: [60, 35] };
+    state.list = [{ id: 'r1', type: 'sofa', status: 'pending', venue_id: '107', action: 'add', combo_rows: [], modules: [], depth_parts: [60, 35] }];
     const res = await app().request('/marketing/requests', json('POST', { ...SOFA, widthCm: 95, depthParts: [60, 35] }), env);
     expect(res.status).toBe(201);
     expect(state.inserted).toMatchObject({ width_cm: 95, depth_parts: [60, 35] });

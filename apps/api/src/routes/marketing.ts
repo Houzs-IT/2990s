@@ -22,6 +22,11 @@
 // a new product names the request it came from (`sourceRequestId`), as Arrive
 // does, which is what shows its photo and its NEW pill.
 //
+// Several showrooms at once (owner 2026-11-12): a NEW request may name more than
+// one showroom (`destinations`). It is still one request per showroom — each
+// arrives on its own — so POST /requests files a row for each, in ONE insert:
+// they are all filed or none is. A saved request keeps exactly one showroom.
+//
 // ── AUTHORIZATION ───────────────────────────────────────────────────────────
 // The caller is a POS tablet holding a HOUZS session, so — exactly like
 // /commission — the bearer is replayed to Houzs /auth/me and Houzs's own answer
@@ -201,8 +206,9 @@ const showroomSchema = z.object({
 
 /** A display, floor plan or request may only be filed under a showroom that
  *  is still listed. The foreign keys stop an id that never existed; this stops
- *  one that was removed, and says so plainly instead of failing an insert. */
-async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string): Promise<Response | null> {
+ *  one that was removed, and says so plainly instead of failing an insert.
+ *  `oneOfSeveral` words it for a save that names more than one showroom. */
+async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string, oneOfSeveral = false): Promise<Response | null> {
   const { data, error } = await sb
     .from('marketing_showrooms')
     .select('id')
@@ -210,7 +216,12 @@ async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string): Promise<R
     .is('archived_at', null)
     .maybeSingle();
   if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'unknown_showroom', reason: 'This showroom is no longer on the list.' }, 409);
+  if (!data) {
+    return c.json({
+      error: 'unknown_showroom',
+      reason: oneOfSeveral ? 'One of these showrooms is no longer on the list.' : 'This showroom is no longer on the list.',
+    }, 409);
+  }
   return null;
 }
 
@@ -402,6 +413,17 @@ const comboRow = z.object({
   accessories: sofaPieces,
 }).transform((r) => ({ ...r, accessories: piecesOn(r.layout, r.accessories) }));
 
+/** One showroom a request goes to and, on a Replace, the piece it takes the
+ *  place of there. */
+const destination = z.object({
+  venueId,
+  replaceId: z.string().regex(UUID_RE).nullable().optional(),
+});
+type Destination = z.infer<typeof destination>;
+
+/** The most showrooms one save may name. */
+const MAX_DESTINATIONS = 20;
+
 const requestBodySchema = z.object({
   type: z.enum(['sofa', 'mattress', 'bedframe']),
   status: z.enum(['pending', 'completed']),
@@ -437,9 +459,13 @@ const requestBodySchema = z.object({
   photo: imageSchema.optional(),
   // Required to SAVE at all, as in the design ("Only the showroom and Add /
   // Replace are required to save") — plus, since 0219, saveGaps.
-  venueId,
+  // One showroom travels as `venueId` (+ `replaceId`), as it always has. A new
+  // request for several names each in `destinations` instead (owner 2026-11-12);
+  // Add / Replace is the same for all of them.
+  venueId: venueId.optional(),
   action: z.enum(['add', 'replace']),
   replaceId: z.string().regex(UUID_RE).nullable().optional(),
+  destinations: z.array(destination).min(1).max(MAX_DESTINATIONS).optional(),
 }).superRefine((v, ctx) => {
   for (const [parts, total, path] of [[v.lengthParts, v.lengthCm, 'lengthParts'], [v.depthParts, v.widthCm, 'depthParts']] as const) {
     if (!parts) continue;
@@ -448,11 +474,22 @@ const requestBodySchema = z.object({
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: PARTS_MISMATCH });
     }
   }
-}).transform((v) => ({
-  ...v,
-  lengthCm: v.lengthParts && v.lengthCm == null ? partsSum(v.lengthParts) : v.lengthCm,
-  widthCm: v.depthParts && v.widthCm == null ? partsSum(v.depthParts) : v.widthCm,
-}));
+  if (!v.destinations && !v.venueId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['venueId'], message: 'Required' });
+  }
+  if (v.destinations && new Set(v.destinations.map((d) => d.venueId)).size !== v.destinations.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['destinations'], message: 'A showroom is listed twice.' });
+  }
+}).transform((v) => {
+  // Every showroom it goes to, however it was sent — the routes read only this.
+  const destinations: Destination[] = v.destinations ?? [{ venueId: v.venueId as string, replaceId: v.replaceId ?? null }];
+  return {
+    ...v,
+    lengthCm: v.lengthParts && v.lengthCm == null ? partsSum(v.lengthParts) : v.lengthCm,
+    widthCm: v.depthParts && v.widthCm == null ? partsSum(v.depthParts) : v.widthCm,
+    destinations,
+  };
+});
 type RequestBody = z.infer<typeof requestBodySchema>;
 
 /** What a request still lacks that it needs to be SAVED at all, even to
@@ -501,26 +538,29 @@ function photoColumns(p: z.infer<typeof imageSchema>, at: string): { ok: true; c
 /** The display a Replace points at must be live, at the same showroom, and of
  *  the same category — the form only offers those, so anything else is a
  *  hand-rolled request. Completing a Replace needs one; a pending Replace may
- *  still be waiting for its showroom to have a candidate. */
+ *  still be waiting for its showroom to have a candidate. Asked once for each
+ *  showroom the request goes to. */
 async function checkReplaceTarget(
   sb: SupabaseClient,
   b: RequestBody,
+  to: Destination,
 ): Promise<string | null> {
   if (b.action !== 'replace') return null;
-  if (!b.replaceId) return b.status === 'completed' ? 'Choose the piece this replaces.' : null;
+  if (!to.replaceId) return b.status === 'completed' ? 'Choose the piece this replaces.' : null;
   const { data, error } = await sb
     .from('marketing_displays')
     .select('id, venue_id, type, removed_at')
-    .eq('id', b.replaceId)
+    .eq('id', to.replaceId)
     .maybeSingle();
   if (error) return `Could not check the piece to replace: ${error.message}`;
   const d = data as { venue_id?: string; type?: string; removed_at?: string | null } | null;
   if (!d || d.removed_at) return 'The piece to replace is no longer on display.';
-  if (d.venue_id !== b.venueId || d.type !== b.type) return 'The piece to replace must be a same-category piece at that showroom.';
+  if (d.venue_id !== to.venueId || d.type !== b.type) return 'The piece to replace must be a same-category piece at that showroom.';
   return null;
 }
 
-const requestColumns = (b: RequestBody) => ({
+/** The request's columns for one of the showrooms it goes to. */
+const requestColumns = (b: RequestBody, to: Destination) => ({
   type: b.type,
   status: b.status,
   supplier_code: b.supplierCode,
@@ -548,9 +588,9 @@ const requestColumns = (b: RequestBody) => ({
   // A note only means something on a Non-exact photo.
   photo_note: b.photoMatch === 'non_exact' ? b.photoNote : '',
   combo_rows: b.rows,
-  venue_id: b.venueId,
+  venue_id: to.venueId,
   action: b.action,
-  replace_display_id: b.action === 'replace' ? (b.replaceId ?? null) : null,
+  replace_display_id: b.action === 'replace' ? (to.replaceId ?? null) : null,
 });
 
 /* ── sofa category + function lists (0219) ────────────────────────────────── */
@@ -1038,6 +1078,15 @@ marketing.delete('/floorplans/:venueId', async (c) => {
 
 const PHOTO_TOO_LARGE = { error: 'too_large', reason: 'The photo is larger than 3 MB.' } as const;
 
+/** Each request keeps its own copy of its photo, so a save for several
+ *  showrooms writes it once per showroom, in one insert. This caps that
+ *  insert: a full 3 MB photo to four showrooms, a usual one (well under 1 MB)
+ *  to as many as a save may name. */
+const BATCH_PHOTO_MAX_BYTES = 4 * IMAGE_MAX_BYTES;
+
+/** File a new product: one request for each showroom it goes to — one, as
+ *  ever, or several (owner 2026-11-12). Everything is checked for every showroom
+ *  first, then the rows go in as ONE insert, so they are all filed or none is. */
 marketing.post('/requests', async (c) => {
   const g = await gate(c);
   if (!g.ok) return g.res;
@@ -1045,32 +1094,42 @@ marketing.post('/requests', async (c) => {
   if (!b.ok) return b.res;
   const parsed = requestBodySchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
-  const gaps = saveGaps(parsed.data, !!parsed.data.photo);
+  const v = parsed.data;
+  const gaps = saveGaps(v, !!v.photo);
   if (gaps.length) return gapsReply(c, gaps);
   const nowIso = new Date().toISOString();
-  const photo = parsed.data.photo ? photoColumns(parsed.data.photo, nowIso) : null;
+  const photo = v.photo ? photoColumns(v.photo, nowIso) : null;
   if (photo && !photo.ok) return c.json(PHOTO_TOO_LARGE, 413);
+  const several = v.destinations.length > 1;
+  if (photo?.ok && Number(photo.cols.photo_bytes) * v.destinations.length > BATCH_PHOTO_MAX_BYTES) {
+    return c.json({
+      error: 'too_large',
+      reason: `This photo is too large to file for ${v.destinations.length} showrooms at once. Choose fewer showrooms, or a smaller photo.`,
+    }, 413);
+  }
   const sb = admin(c);
-  const unlisted = await listedShowroom(c, sb, parsed.data.venueId);
+  const unlisted = (await Promise.all(v.destinations.map((to) => listedShowroom(c, sb, to.venueId, several)))).find((r) => r !== null);
   if (unlisted) return unlisted;
-  const bad = await checkReplaceTarget(sb, parsed.data);
+  const bad = (await Promise.all(v.destinations.map((to) => checkReplaceTarget(sb, v, to)))).find((r) => r !== null);
   if (bad) return c.json({ error: 'invalid_replace', reason: bad }, 409);
   const { data, error } = await sb
     .from('marketing_launch_requests')
-    .insert({
-      ...requestColumns(parsed.data),
+    .insert(v.destinations.map((to) => ({
+      ...requestColumns(v, to),
       ...(photo?.ok ? photo.cols : {}),
       requested_by: String(g.caller.userId),
       requested_by_name: g.caller.name,
       requested_by_role: roleLabel(g.caller),
       updated_by: String(g.caller.userId),
       updated_by_name: g.caller.name,
-      completed_at: parsed.data.status === 'completed' ? nowIso : null,
-    })
-    .select(REQUEST_SELECT)
-    .single();
+      completed_at: v.status === 'completed' ? nowIso : null,
+    })))
+    .select(REQUEST_SELECT);
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
-  return c.json({ request: requestToWire(data as unknown as Record<string, unknown>) }, 201);
+  const saved = ((data ?? []) as unknown as Record<string, unknown>[]).map(requestToWire);
+  if (!saved.length) return c.json({ error: 'insert_failed', reason: 'The request was not saved.' }, 500);
+  // `request` is what a POS from before several showrooms reads; it sends one.
+  return c.json({ request: saved[0], requests: saved }, 201);
 });
 
 /** Fill in / Edit. Only an open request (pending or completed) can change. */
@@ -1083,6 +1142,12 @@ marketing.put('/requests/:id', async (c) => {
   if (!b.ok) return b.res;
   const parsed = requestBodySchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
+  // A saved request is one showroom's; only a new one may name several.
+  const to = parsed.data.destinations[0];
+  if (!to || parsed.data.destinations.length > 1) {
+    const message = 'A saved request goes to one showroom.';
+    return c.json({ error: 'validation_failed', reason: message, issues: [{ path: ['destinations'], message }] }, 400);
+  }
   const sb = admin(c);
   // An edit that sends no photo keeps the saved one, so whether there IS one
   // is the stored row's to say.
@@ -1100,14 +1165,14 @@ marketing.put('/requests/:id', async (c) => {
   const nowIso = new Date().toISOString();
   const photo = parsed.data.photo ? photoColumns(parsed.data.photo, nowIso) : null;
   if (photo && !photo.ok) return c.json(PHOTO_TOO_LARGE, 413);
-  const unlisted = await listedShowroom(c, sb, parsed.data.venueId);
+  const unlisted = await listedShowroom(c, sb, to.venueId);
   if (unlisted) return unlisted;
-  const bad = await checkReplaceTarget(sb, parsed.data);
+  const bad = await checkReplaceTarget(sb, parsed.data, to);
   if (bad) return c.json({ error: 'invalid_replace', reason: bad }, 409);
   const { data, error } = await sb
     .from('marketing_launch_requests')
     .update({
-      ...requestColumns(parsed.data),
+      ...requestColumns(parsed.data, to),
       ...(photo?.ok ? photo.cols : {}),
       updated_at: nowIso,
       updated_by: String(g.caller.userId),

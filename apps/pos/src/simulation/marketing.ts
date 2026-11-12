@@ -380,15 +380,22 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     if (method === 'DELETE') { delete st.floorplans[vid]; save(); return json({ ok: true }); }
   }
   if (path === '/marketing/requests' && method === 'POST') {
-    if (!body.venueId || !body.action) return json({ error: 'validation_failed' }, 400);
+    // One showroom as `venueId`, or several as `destinations` — the API's
+    // rule: a request for each showroom, all of them or none.
+    const to: Row[] = Array.isArray(body.destinations) ? body.destinations
+      : body.venueId ? [{ venueId: body.venueId, replaceId: body.replaceId ?? null }] : [];
+    if (!to.length || !body.action || new Set(to.map((x) => x.venueId)).size !== to.length) return json({ error: 'validation_failed' }, 400);
     const gaps = saveGaps(body, !!body.photo);
     if (gaps.length) return gapsReply(gaps);
-    const gone = unlisted(body.venueId);
-    if (gone) return gone;
-    const row = { id: `sim-r${st.serial++}`, ...requestCols(body), requested_by_name: me.name, requested_by_role: me.role, created_at: now() };
-    keepPhoto(row.id, body.photo);
-    st.requests.push(row); save();
-    return json({ request: requestWire(row) }, 201);
+    const gone = to.map((x) => unlisted(x.venueId)).find((r) => r !== null);
+    if (gone) return to.length > 1 ? json({ error: 'unknown_showroom', reason: 'One of these showrooms is no longer on the list.' }, 409) : gone;
+    const rows = to.map((x) => ({
+      id: `sim-r${st.serial++}`, ...requestCols({ ...body, venueId: x.venueId, replaceId: x.replaceId ?? null }),
+      requested_by_name: me.name, requested_by_role: me.role, created_at: now(),
+    }));
+    for (const row of rows) { keepPhoto(row.id, body.photo); st.requests.push(row); }
+    save();
+    return json({ request: requestWire(rows[0]!), requests: rows.map(requestWire) }, 201);
   }
   m = /^\/marketing\/requests\/([^/]+)(\/arrive)?$/.exec(path);
   if (m) {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankRequest, cmOf, diagramSizeProblem, detailRows, displayCopyFrom, exportText, inch, missingOf, photoSourceOf, preparedFromDataUrl,
-  requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf, tagsOf, type DisplayItem,
-  type LaunchRequest,
+  blankRequest, cmOf, destinationFields, destinationsOf, diagramSizeProblem, detailRows, displayCopyFrom, exportText, inch, missingOf,
+  photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, saveBlockersOf, saveMissingOf, shapeName, showroomLabel, sizeText, specOf,
+  tagsOf, type DisplayItem, type LaunchRequest,
 } from './marketing-model';
 
 const item = (over: Partial<DisplayItem>): DisplayItem => ({
@@ -164,6 +164,42 @@ describe('what saving needs', () => {
   });
 });
 
+/* owner 2026-11-12: a new product can go to several showrooms at once — a
+   request is filed for each. */
+describe('several showrooms', () => {
+  const req = (over: Partial<LaunchRequest>): LaunchRequest => ({ ...blankRequest('Loo', 'Sales'), ...over });
+
+  it('lists every showroom a request goes to, its own first', () => {
+    expect(destinationsOf(req({}))).toEqual([]);
+    expect(destinationsOf(req({ showroomId: '107', replaceId: 'd1' }))).toEqual([{ showroomId: '107', replaceId: 'd1' }]);
+    expect(destinationsOf(req({ showroomId: '107', alsoTo: [{ showroomId: '108', replaceId: 'd2' }] }))).toEqual([
+      { showroomId: '107', replaceId: null }, { showroomId: '108', replaceId: 'd2' },
+    ]);
+  });
+
+  it('writes them back with the first as the request’s own', () => {
+    const to = [{ showroomId: '107', replaceId: 'd1' }, { showroomId: '108', replaceId: null }];
+    expect(destinationFields(to)).toEqual({ showroomId: '107', replaceId: 'd1', alsoTo: [{ showroomId: '108', replaceId: null }] });
+    expect(destinationsOf(req(destinationFields(to)))).toEqual(to);
+    // Unticking the last showroom leaves none chosen.
+    expect(destinationFields([])).toEqual({ showroomId: '', replaceId: null, alsoTo: [] });
+  });
+
+  it('needs nothing more to save, however many showrooms it goes to', () => {
+    const r = req({ ...SAVEABLE_SOFA, alsoTo: [{ showroomId: '108', replaceId: null }] });
+    expect(saveMissingOf(r)).toEqual([]);
+  });
+
+  it('wants the piece to replace at every showroom before a Replace can be completed', () => {
+    const mattress = { type: 'mattress', supplierCode: 'S', model: 'M', size: 'King', height: '13', showroomId: '107', action: 'replace' } as const;
+    const oneLeft = req({ ...mattress, replaceId: 'd1', alsoTo: [{ showroomId: '108', replaceId: null }] });
+    expect(missingOf(oneLeft)).toEqual(['Item to replace']);
+    // Pending Info may still wait for that showroom to have a piece.
+    expect(saveBlockersOf(oneLeft)).toEqual([]);
+    expect(missingOf(req({ ...mattress, replaceId: 'd1', alsoTo: [{ showroomId: '108', replaceId: 'd2' }] }))).toEqual([]);
+  });
+});
+
 describe('size', () => {
   it('reads whole cm and refuses what is not a size', () => {
     expect(cmOf('220')).toBe(220);
@@ -208,7 +244,7 @@ describe('duplicate', () => {
       layout: LAYOUT, lengthCm: '280', widthCm: '160', sofaCategory: 'Seater', sofaFunction: 'Push back',
       rows: [{ modules: ['2A(LHF)', 'L(RHF)'], price: '3540', layout: LAYOUT }],
     });
-    for (const k of ['id', 'status', 'showroomId', 'action', 'replaceId', 'by', 'byRole', 'created', 'photoAt', 'photoUpload'] as const) {
+    for (const k of ['id', 'status', 'showroomId', 'action', 'replaceId', 'alsoTo', 'by', 'byRole', 'created', 'photoAt', 'photoUpload'] as const) {
       expect(f).not.toHaveProperty(k);
     }
   });

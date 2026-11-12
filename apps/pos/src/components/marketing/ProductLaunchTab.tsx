@@ -204,7 +204,13 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
           displays={state.displays}
           requests={state.requests}
           sofaOptions={state.sofaOptions}
-          onSaved={(status) => { setDraft(null); toast(status === 'completed' ? 'Moved to Completed Info' : 'Saved to Pending Info'); }}
+          onSaved={(status, count) => {
+            setDraft(null);
+            const where = status === 'completed' ? 'Completed Info' : 'Pending Info';
+            // A new product for several showrooms is a request for each of them.
+            toast(count > 1 ? `${count} requests saved to ${where} — one for each showroom`
+              : status === 'completed' ? 'Moved to Completed Info' : 'Saved to Pending Info');
+          }}
         />
       )}
 

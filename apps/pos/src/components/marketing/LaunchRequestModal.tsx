@@ -5,10 +5,15 @@
 // else can be filled later. When editing an existing request, every other
 // empty field carries a TO FILL tag, and Complete needs them all.
 //
+// A NEW request can go to several showrooms at once (owner 2026-11-12): its
+// Showroom field ticks any number of them, and saving files one request for
+// each — each showroom's piece arrives on its own. Add / Replace is the same
+// for all of them, and a Replace picks its piece at every showroom. A saved
+// request stays one showroom's: its Showroom field is the single select.
+//
 // ⋯ › Duplicate from… (owner 2026-10-10) fills it from another request on the
-// board — however much of it is filled in — or from a piece on display: one
-// new model going to three showrooms is three requests, the second and third
-// copies of the first.
+// board — however much of it is filled in — or from a piece on display: a
+// second showroom for a product already on the board is a copy of its request.
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { Depth } from '@2990s/shared';
@@ -17,8 +22,8 @@ import { cellsFromComboModules } from '../../lib/sofa-combo-cells';
 import { ImageUp, Pencil, Upload, X } from 'lucide-react';
 import { TakePhoto } from './TakePhoto';
 import {
-  cmOf, compLine, hasPhoto, lengthText, missingOf, partsFor, partsTotal, photoSourceOf, preparedFromDataUrl, requestFieldsFrom, RM, requestTotal,
-  saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, shownParts, specOf, TYPES,
+  cmOf, compLine, destinationFields, destinationsOf, hasPhoto, lengthText, missingOf, partsFor, partsTotal, photoSourceOf, preparedFromDataUrl,
+  requestFieldsFrom, RM, requestTotal, saveBlockersOf, saveMissingOf, seatDepth, shapeName, showroomLabel, shownParts, specOf, TYPES,
   type DisplayItem, type DuplicateSource, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
@@ -27,6 +32,7 @@ import {
 } from '../../lib/marketing-api';
 import { ComponentBuilder, type BuiltSofa } from './ComponentBuilder';
 import { DuplicateFrom, FormMoreMenu } from './DuplicateFrom';
+import { ShowroomsPicker } from './ShowroomsPicker';
 import { SofaLayoutPreview } from './SofaLayoutPreview';
 import { PartsRow, ShowPartsChoice } from './ShowPartsChoice';
 import s from './marketing.module.css';
@@ -52,7 +58,8 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   requests: LaunchRequest[];
   /** Category → Function lists, kept in Marketing → ⋯ → Maintenance. */
   sofaOptions: SofaCategoryOption[];
-  onSaved: (status: RequestStatus) => void;
+  /** `count` is how many requests were filed: one for each showroom. */
+  onSaved: (status: RequestStatus, count: number) => void;
 }) => {
   const [err, setErr] = useState('');
   const [builder, setBuilder] = useState<BuilderTarget | null>(null);
@@ -78,14 +85,19 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   }, []);
 
   /** The design's setDraft: a Replace keeps a valid same-category candidate
-   *  selected (the first one by default); leaving Replace clears it. */
+   *  selected (the first one by default) at every showroom the request goes
+   *  to; leaving Replace clears them. */
   const patch = (p: Partial<LaunchRequest>) => {
     const next = { ...latest.current, ...p };
-    if (('showroomId' in p || 'type' in p || 'action' in p) && next.action === 'replace') {
-      const c = displays.filter((x) => x.venueId === next.showroomId && x.type === next.type);
-      if (!c.find((x) => x.id === next.replaceId)) next.replaceId = c[0]?.id ?? null;
+    const to = destinationsOf(next);
+    if (next.action !== 'replace') {
+      Object.assign(next, destinationFields(to.map((x) => ({ ...x, replaceId: null }))));
+    } else if ('showroomId' in p || 'alsoTo' in p || 'type' in p || 'action' in p) {
+      Object.assign(next, destinationFields(to.map((x) => {
+        const c = displays.filter((y) => y.venueId === x.showroomId && y.type === next.type);
+        return c.some((y) => y.id === x.replaceId) ? x : { ...x, replaceId: c[0]?.id ?? null };
+      })));
     }
-    if (next.action !== 'replace') next.replaceId = null;
     setErr('');
     setDraft(next);
   };
@@ -96,8 +108,18 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
   const saveNeeds = saveMissingOf(d);
   const blockers = saveBlockersOf(d);
   const tl = TYPES.find((t) => t.id === d.type)!.label.toLowerCase();
-  const cands = displays.filter((x) => x.venueId === d.showroomId && x.type === d.type);
-  const rep = cands.find((c) => c.id === d.replaceId) ?? null;
+  // Where it goes: one showroom on a saved request, any number on a new one.
+  const dests = destinationsOf(d);
+  const several = dests.length > 1;
+  const showroomLabelOf = (id: string) => {
+    const x = showrooms.find((o) => o.id === id);
+    return x ? showroomLabel(x) : 'Showroom';
+  };
+  /** Tick or untick showrooms: each one still ticked keeps the piece chosen for it. */
+  const setShowrooms = (ids: string[]) =>
+    patch(destinationFields(ids.map((id) => dests.find((x) => x.showroomId === id) ?? { showroomId: id, replaceId: null })));
+  const setReplaceAt = (showroomId: string, replaceId: string) =>
+    patch(destinationFields(dests.map((x) => (x.showroomId === showroomId ? { ...x, replaceId } : x))));
   const isSofa = d.type === 'sofa';
   const isBed = d.type === 'bedframe';
   const showFabric = isSofa || isBed;
@@ -148,8 +170,8 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
       return;
     }
     try {
-      await save.mutateAsync({ draft: d, status });
-      onSaved(status);
+      const saved = await save.mutateAsync({ draft: d, status });
+      onSaved(status, saved.length);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -243,16 +265,26 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                   <span className={s.requiredTag}>Required</span>
                 </div>
                 <div className={s.twoCol}>
-                  <label className={s.field}>
-                    <span className={s.fieldLabel}>Showroom</span>
-                    <select className={s.select} value={d.showroomId} onChange={(e) => patch({ showroomId: e.target.value })}>
-                      <option value="">Choose showroom…</option>
-                      {showrooms.map((o) => <option key={o.id} value={o.id}>{showroomLabel(o)}</option>)}
-                    </select>
-                    {showrooms.length === 0 && (
-                      <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
-                    )}
-                  </label>
+                  {isEdit ? (
+                    <label className={s.field}>
+                      <span className={s.fieldLabel}>Showroom</span>
+                      <select className={s.select} value={d.showroomId} onChange={(e) => patch({ showroomId: e.target.value })}>
+                        <option value="">Choose showroom…</option>
+                        {showrooms.map((o) => <option key={o.id} value={o.id}>{showroomLabel(o)}</option>)}
+                      </select>
+                      {showrooms.length === 0 && (
+                        <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
+                      )}
+                    </label>
+                  ) : (
+                    <div className={s.field}>
+                      <span className={s.fieldLabel}>Showroom</span>
+                      <ShowroomsPicker showrooms={showrooms} value={dests.map((x) => x.showroomId)} onChange={setShowrooms} />
+                      {showrooms.length === 0 && (
+                        <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
+                      )}
+                    </div>
+                  )}
                   <div className={s.field}>
                     <span className={s.fieldLabel}>Action</span>
                     <div className={s.actionRow}>
@@ -262,36 +294,59 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displa
                     </div>
                   </div>
                 </div>
-                {d.action === 'replace' && (
+                {several && (
                   <div className={s.field}>
-                    <span className={s.replaceHint}>
-                      {!d.showroomId ? 'Choose a showroom first.'
-                        : cands.length ? `Pick the ${tl} on display to replace — it is removed when the new product arrives:`
-                        : `No ${tl} on display at this showroom. Use Add instead.`}
-                    </span>
-                    {cands.length > 0 && (
-                      <>
-                        <select className={`${s.select} ${s.replaceSelect}`} value={d.replaceId ?? ''} onChange={(e) => patch({ replaceId: e.target.value })}>
-                          {cands.map((c) => (
-                            <option key={c.id} value={c.id}>{c.type === 'sofa' ? `${c.name} — ${c.modules.join(' + ')}` : `${c.name} — ${c.size || '—'}`}</option>
-                          ))}
-                        </select>
-                        <div className={s.replacePreview}>
-                          {rep?.type === 'sofa' && (
-                            <div className={s.replaceThumb}>
-                              <SofaLayoutPreview layout={rep.layout} pieces={rep.accessories} pieceOptions={opts.sofaAccessoryById} modules={rep.modules} depth={seatDepth(rep.seat)} art={art} />
-                            </div>
-                          )}
-                          <span className={s.replaceText}>
-                            <span className={s.replaceName}>{rep?.name ?? ''}</span>
-                            <span className={s.replaceSpec}>{rep ? specOf(rep) : ''}</span>
-                          </span>
-                          <span className={s.willRemove}>Will be removed</span>
-                        </div>
-                      </>
-                    )}
+                    <div className={s.destPills}>
+                      {dests.map((x) => <span key={x.showroomId} className={s.destPill}>{showroomLabelOf(x.showroomId)}</span>)}
+                    </div>
+                    <span className={s.replaceHint}>A request is filed for each showroom, so each one can arrive on its own.</span>
                   </div>
                 )}
+                {d.action === 'replace' && dests.length === 0 && (
+                  <div className={s.field}>
+                    <span className={s.replaceHint}>Choose a showroom first.</span>
+                  </div>
+                )}
+                {/* A Replace takes a piece off the floor at every showroom it goes to. */}
+                {d.action === 'replace' && dests.map((to) => {
+                  const cands = displays.filter((x) => x.venueId === to.showroomId && x.type === d.type);
+                  const rep = cands.find((c) => c.id === to.replaceId) ?? null;
+                  const where = showroomLabelOf(to.showroomId);
+                  return (
+                    <div key={to.showroomId} className={s.field}>
+                      {several && <span className={s.replaceWhere}>{where}</span>}
+                      <span className={s.replaceHint}>
+                        {cands.length ? `Pick the ${tl} on display to replace — it is removed when the new product arrives:`
+                          : several ? `No ${tl} on display here. Leave this showroom out, or use Add instead.`
+                          : `No ${tl} on display at this showroom. Use Add instead.`}
+                      </span>
+                      {cands.length > 0 && (
+                        <>
+                          <select
+                            className={`${s.select} ${s.replaceSelect}`} value={to.replaceId ?? ''} aria-label={`Piece to replace at ${where}`}
+                            onChange={(e) => setReplaceAt(to.showroomId, e.target.value)}
+                          >
+                            {cands.map((c) => (
+                              <option key={c.id} value={c.id}>{c.type === 'sofa' ? `${c.name} — ${c.modules.join(' + ')}` : `${c.name} — ${c.size || '—'}`}</option>
+                            ))}
+                          </select>
+                          <div className={s.replacePreview}>
+                            {rep?.type === 'sofa' && (
+                              <div className={s.replaceThumb}>
+                                <SofaLayoutPreview layout={rep.layout} pieces={rep.accessories} pieceOptions={opts.sofaAccessoryById} modules={rep.modules} depth={seatDepth(rep.seat)} art={art} />
+                              </div>
+                            )}
+                            <span className={s.replaceText}>
+                              <span className={s.replaceName}>{rep?.name ?? ''}</span>
+                              <span className={s.replaceSpec}>{rep ? specOf(rep) : ''}</span>
+                            </span>
+                            <span className={s.willRemove}>Will be removed</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {isSofa && (
