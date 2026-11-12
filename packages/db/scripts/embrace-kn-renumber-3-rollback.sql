@@ -1,0 +1,140 @@
+-- 2990-0058 — EMBRACE KN renumber, step 3 of 3: ROLLBACK of step 2.
+--
+-- Puts every code back where it was before step 2 (the inverse map). Same
+-- reviewed list, same two passes, same company-2-only scope. Run it in the
+-- same database(s) step 2 ran in. It cannot undo anything outside the
+-- database (printouts, POs already sent, notes in the showroom).
+--
+-- Proof before COMMIT: every colour row's name matches its OLD code again.
+
+BEGIN;
+
+CREATE TEMP TABLE kn_map (old_code text PRIMARY KEY, new_code text UNIQUE, colour text) ON COMMIT DROP;
+INSERT INTO kn_map VALUES
+  ('KN01','KN06','Pearl'),  ('KN02','KN07','Sand'),    ('KN03','KN09','Desert'),
+  ('KN04','KN08','Velvet'), ('KN05','KN13','Rosewood'),('KN06','KN11','Caramel'),
+  ('KN07','KN12','Forest'), ('KN08','KN10','Teal'),    ('KN09','KN01','Aegean'),
+  ('KN10','KN03','Navy'),   ('KN11','KN05','Grey'),    ('KN12','KN04','Nobel'),
+  ('KN13','KN02','Shadow');
+
+-- The reviewed list: (database, table, column). Fill from step 1's output.
+-- A listed column that does not exist is skipped and reported, not an error.
+CREATE TEMP TABLE kn_target (db text, tbl text, col text) ON COMMIT DROP;
+INSERT INTO kn_target VALUES
+  -- Houzs (schema scm, company 2) — seen in Houzs code; CONFIRM against step 1
+  ('houzs','fabric_colours','fabric_id'),   ('houzs','fabric_colours','colour_id'),
+  ('houzs','fabric_library','id'),          ('houzs','fabric_library','label'),
+  ('houzs','fabric_library','fabric_code'),
+  ('houzs','fabric_trackings','id'),        ('houzs','fabric_trackings','fabric_code'),
+  ('houzs','mfg_sales_order_items','variants'),
+  ('houzs','product_models','allowed_options'),
+  ('houzs','hr_item_kpi','ref'),         ('houzs','hr_item_kpi','label'),
+  -- 2990s (schema public) — KPI rules added 9 Nov + the fabric_library backfill
+  ('2990s','hr_item_kpi','ref'),         ('2990s','hr_item_kpi','label'),
+  ('2990s','fabric_library','id'),          ('2990s','fabric_library','label');
+
+DROP TABLE IF EXISTS kn_log;
+CREATE TEMP TABLE kn_log (tbl text, col text, kind text, row_updates int, note text);  -- a json row holding 3 codes counts 3
+
+DO $$
+DECLARE
+  is2990 boolean := to_regclass('public.campaign_promos') IS NOT NULL;
+  v_db text  := CASE WHEN is2990 THEN '2990s' ELSE 'houzs' END;
+  sch text   := CASE WHEN is2990 THEN 'public' ELSE 'scm' END;
+  co  bigint := CASE WHEN is2990 THEN NULL ELSE 2 END;
+  r record; m record; pass int; n int; total int; scope text; unlisted text := '';
+  codes text := '''KN01'',''KN02'',''KN03'',''KN04'',''KN05'',''KN06'',''KN07'',''KN08'',''KN09'',''KN10'',''KN11'',''KN12'',''KN13''';
+BEGIN
+  IF NOT is2990 AND to_regnamespace('scm') IS NULL THEN
+    RAISE EXCEPTION 'Neither the 2990s nor the Houzs database — stopped.';
+  END IF;
+
+  -- Every candidate column, with how to match a whole-value code in it.
+  CREATE TEMP TABLE kn_cols ON COMMIT DROP AS
+  SELECT c.table_name AS tbl, c.column_name AS col,
+         CASE WHEN c.udt_name IN ('_text','_varchar') THEN 'array'
+              WHEN c.data_type = 'jsonb' THEN 'jsonb'
+              WHEN c.data_type = 'json'  THEN 'json'
+              ELSE 'text' END AS kind,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = sch AND k.table_name = c.table_name
+                    AND k.column_name = 'company_id') AS has_co
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema
+                                    AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
+   WHERE c.table_schema = sch
+     AND (c.data_type IN ('text','character varying','character','json','jsonb')
+          OR c.udt_name IN ('_text','_varchar'));
+
+  -- 1. Refuse while a code sits in a column nobody reviewed, in ANY company:
+  --    a missed column would keep the old code and silently mean another colour.
+  FOR r IN SELECT * FROM kn_cols LOOP
+    EXECUTE format('SELECT count(*) FROM %I.%I WHERE %s', sch, r.tbl,
+      CASE r.kind WHEN 'text'  THEN format('%I IN (%s)', r.col, codes)
+                  WHEN 'array' THEN format('%I::text[] && ARRAY[%s]', r.col, codes)
+                  ELSE format('%I::text ~ ''"KN(0[1-9]|1[0-3])"''', r.col) END) INTO n;
+    IF n > 0 AND NOT EXISTS (SELECT 1 FROM kn_target t WHERE t.db = v_db AND t.tbl = r.tbl AND t.col = r.col) THEN
+      unlisted := unlisted || format(' %s.%s (%s rows);', r.tbl, r.col, n);
+    END IF;
+    IF n > 0 AND co IS NOT NULL AND NOT r.has_co
+       AND EXISTS (SELECT 1 FROM kn_target t WHERE t.db = v_db AND t.tbl = r.tbl AND t.col = r.col) THEN
+      unlisted := unlisted || format(' %s.%s has no company_id — cannot scope to company 2;', r.tbl, r.col);
+    END IF;
+  END LOOP;
+  IF unlisted <> '' THEN
+    RAISE EXCEPTION 'Not on the reviewed list, nothing changed:%', unlisted;
+  END IF;
+
+  INSERT INTO kn_log
+  SELECT t.tbl, t.col, NULL, 0, 'column not in this database — skipped'
+    FROM kn_target t
+   WHERE t.db = v_db AND NOT EXISTS (SELECT 1 FROM kn_cols c WHERE c.tbl = t.tbl AND c.col = t.col);
+
+  -- 2. Two passes: old → temporary token, then token → new.
+  FOR pass IN 1..2 LOOP
+    FOR r IN SELECT c.* FROM kn_cols c JOIN kn_target t ON t.tbl = c.tbl AND t.col = c.col AND t.db = v_db LOOP
+      scope := CASE WHEN co IS NOT NULL THEN format(' AND company_id = %s', co) ELSE '' END;
+      total := 0;
+      FOR m IN SELECT CASE pass WHEN 1 THEN old_code ELSE 'zzKNRENUM' || substr(new_code, 3) END AS f,
+                      CASE pass WHEN 1 THEN 'zzKNRENUM' || substr(new_code, 3) ELSE new_code END AS t
+                 FROM kn_map LOOP
+        EXECUTE CASE r.kind
+          WHEN 'text'  THEN format('UPDATE %I.%I SET %I = %L WHERE %I = %L%s', sch, r.tbl, r.col, m.t, r.col, m.f, scope)
+          WHEN 'array' THEN format('UPDATE %I.%I SET %I = array_replace(%I, %L, %L) WHERE %L = ANY(%I)%s',
+                                   sch, r.tbl, r.col, r.col, m.f, m.t, m.f, r.col, scope)
+          ELSE format('UPDATE %I.%I SET %I = replace(%I::text, %L, %L)::%s WHERE strpos(%I::text, %L) > 0%s',
+                      sch, r.tbl, r.col, r.col, '"' || m.f || '"', '"' || m.t || '"', r.kind, r.col, '"' || m.f || '"', scope)
+        END;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        total := total + n;
+      END LOOP;
+      IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, r.col, r.kind, total, NULL); END IF;
+    END LOOP;
+  END LOOP;
+
+  -- 3. The colour list follows the new numbers: hand the 13 rows' existing
+  --    sort_order values out again in KN01..KN13 order (Houzs picker order).
+  IF to_regclass(format('%I.fabric_colours', sch)) IS NOT NULL THEN
+    EXECUTE format($q$
+      WITH rows AS (SELECT ctid, colour_id, sort_order FROM %I.fabric_colours
+                     WHERE colour_id IN (%s)%s),
+           slots AS (SELECT sort_order, row_number() OVER (ORDER BY sort_order, colour_id) AS i FROM rows),
+           want  AS (SELECT ctid, row_number() OVER (ORDER BY colour_id) AS i FROM rows)
+      UPDATE %I.fabric_colours f SET sort_order = s.sort_order
+        FROM want w JOIN slots s USING (i) WHERE f.ctid = w.ctid$q$,
+      sch, codes, CASE WHEN co IS NOT NULL THEN format(' AND company_id = %s', co) ELSE '' END, sch);
+  END IF;
+
+  -- 4. Proof before COMMIT: every colour row's name matches its new code.
+  IF EXISTS (SELECT 1 FROM kn_cols WHERE tbl = 'fabric_colours' AND col = 'label') THEN
+    EXECUTE format($q$SELECT count(*) FROM %I.fabric_colours f JOIN kn_map k ON k.new_code = f.colour_id
+                       WHERE lower(trim(f.label)) <> lower(k.colour)%s$q$,
+                   sch, CASE WHEN co IS NOT NULL THEN format(' AND f.company_id = %s', co) ELSE '' END) INTO n;
+    IF n > 0 THEN RAISE EXCEPTION '% colour rows have a name that does not match the new code — rolled back.', n; END IF;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- What changed (this session only).
+SELECT * FROM kn_log ORDER BY tbl, col;
