@@ -15,9 +15,9 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { bearerToken } from './apiClient';
-import { cmOf, partsFor } from '../components/marketing/marketing-model';
+import { cmOf, destinationsOf, partsFor } from '../components/marketing/marketing-model';
 import type {
-  ComboRow, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
+  ComboRow, Destination, DisplayItem, DisplayType, LaunchRequest, PhotoMatch, PreparedImage, RequestAction, RequestStatus, RequestType,
   SofaLayout, SofaPieces,
 } from '../components/marketing/marketing-model';
 
@@ -135,7 +135,22 @@ const priceOut = (r: ComboRow): number | null => {
 export const piecesOut = (layout: SofaLayout | null | undefined, p: SofaPieces | null | undefined): SofaPieces | null =>
   (layout?.length && p?.length ? p : null);
 
-const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
+/** Where the request goes, as the wire wants it. One showroom travels as
+ *  `venueId` + `replaceId`, as it always has. A NEW request for several (owner
+ *  2026-11-12) names each in `destinations` instead, and the API files one
+ *  request per showroom, all of them or none. It sends no `venueId` then, on
+ *  purpose: an API from before this would file the first showroom alone and
+ *  say it saved — without one, it refuses the save instead. */
+const destinationBody = (d: LaunchRequest) => {
+  const replaceOf = (x: Destination) => (d.action === 'replace' ? x.replaceId : null);
+  const to = d.id ? [] : destinationsOf(d);
+  return to.length > 1
+    ? { destinations: to.map((x) => ({ venueId: x.showroomId, replaceId: replaceOf(x) })) }
+    : { venueId: d.showroomId, replaceId: replaceOf(d) };
+};
+
+/** Exported for its test. */
+export const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   type: d.type, status, supplierCode: d.supplierCode, model: d.model, fabric: d.fabric, colour: d.colour,
   leg: d.leg, seat: d.seat, size: d.size, height: d.height, divan: d.divan, gap: d.gap, modules: d.modules,
   layout: d.layout && d.layout.length ? d.layout : null,
@@ -150,7 +165,7 @@ const requestBody = (d: LaunchRequest, status: RequestStatus) => ({
   // sofa's only — a mattress or bed frame form has no photo.
   ...(d.type === 'sofa' && d.photoUpload ? { photo: d.photoUpload } : {}),
   rows: d.rows.map((r) => ({ modules: r.modules, price: priceOut(r), layout: r.layout && r.layout.length ? r.layout : null, accessories: piecesOut(r.layout, r.accessories) })),
-  venueId: d.showroomId, action: d.action, replaceId: d.action === 'replace' ? d.replaceId : null,
+  action: d.action, ...destinationBody(d),
 });
 
 /* ── hooks ────────────────────────────────────────────────────────────────── */
@@ -352,14 +367,17 @@ export function useDeleteFloorplan() {
   });
 }
 
+/** Save a request: an edit of a saved one, or a new one. Resolves to the
+ *  requests saved — one, or, for a new product going to several showrooms, one
+ *  for each of them. */
 export function useSaveRequest() {
   const done = useInvalidate();
   return useMutation({
     mutationFn: ({ draft, status }: { draft: LaunchRequest; status: RequestStatus }) =>
       (draft.id
-        ? call<{ request: WireRequest }>(`/requests/${encodeURIComponent(draft.id)}`, { method: 'PUT', body: JSON.stringify(requestBody(draft, status)) })
-        : call<{ request: WireRequest }>('/requests', { method: 'POST', body: JSON.stringify(requestBody(draft, status)) })
-      ).then((r) => toRequest(r.request)),
+        ? call<{ request: WireRequest; requests?: WireRequest[] }>(`/requests/${encodeURIComponent(draft.id)}`, { method: 'PUT', body: JSON.stringify(requestBody(draft, status)) })
+        : call<{ request: WireRequest; requests?: WireRequest[] }>('/requests', { method: 'POST', body: JSON.stringify(requestBody(draft, status)) })
+      ).then((r) => (r.requests ?? [r.request]).map(toRequest)),
     onSuccess: done,
   });
 }

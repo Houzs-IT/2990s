@@ -121,6 +121,13 @@ export interface PreparedImage {
  *  details changed (Non-exact)? '' until chosen. */
 export type PhotoMatch = '' | 'exact' | 'non_exact';
 
+/** One showroom a new product goes to and, on a Replace, the piece it takes
+ *  the place of there. */
+export interface Destination {
+  showroomId: string;
+  replaceId: string | null;
+}
+
 /** A Management → Marketing new-product request (the draft and the saved
  *  record share this shape, as in the design). */
 export interface LaunchRequest {
@@ -168,6 +175,11 @@ export interface LaunchRequest {
   showroomId: string;
   action: RequestAction;
   replaceId: string | null;
+  /** A NEW request only (owner 2026-11-12): the other showrooms it also goes to,
+   *  after `showroomId`, each with the piece it replaces there. Saving files
+   *  one request for each showroom. A saved request is one showroom's, so it
+   *  never has this. Read and write through destinationsOf / destinationFields. */
+  alsoTo?: Destination[];
   by: string;
   byRole: string;
   /** ISO timestamp of creation, '' on an unsaved draft. */
@@ -179,6 +191,20 @@ export const blankRequest = (by: string, byRole: string): LaunchRequest => ({
   size: '', height: '', divan: '', gap: '', modules: [], layout: null, lengthCm: '', widthCm: '', sofaCategory: '', sofaFunction: '',
   photoAt: null, photoUpload: null, photoMatch: '', photoNote: '', rows: [], showroomId: '', action: '', replaceId: null,
   by, byRole, created: '',
+});
+
+/* ── where a request goes (owner 2026-11-12) ─────────────────────────────────── */
+
+type DestinationFields = Pick<LaunchRequest, 'showroomId' | 'replaceId' | 'alsoTo'>;
+
+/** Every showroom a request goes to, its own first; none until one is chosen. */
+export const destinationsOf = (r: DestinationFields): Destination[] =>
+  (r.showroomId ? [{ showroomId: r.showroomId, replaceId: r.replaceId }, ...(r.alsoTo ?? [])] : []);
+
+/** A request's destination fields for the showrooms it goes to: the first is
+ *  its own, the rest go beside it. */
+export const destinationFields = (to: readonly Destination[]): Required<DestinationFields> => ({
+  showroomId: to[0]?.showroomId ?? '', replaceId: to[0]?.replaceId ?? null, alsoTo: to.slice(1),
 });
 
 /** A typed length or width as whole cm (1–1000, rounded), or null when blank
@@ -424,7 +450,8 @@ export function missingOf(r: LaunchRequest): string[] {
   }
   if (!r.showroomId) m.push('Showroom');
   if (!r.action) m.push('Add / Replace');
-  if (r.action === 'replace' && !r.replaceId) m.push('Item to replace');
+  // A Replace names its piece at every showroom the request goes to.
+  if (r.action === 'replace' && (!r.replaceId || (r.alsoTo ?? []).some((x) => !x.replaceId))) m.push('Item to replace');
   return m;
 }
 

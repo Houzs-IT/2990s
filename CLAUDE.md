@@ -459,7 +459,21 @@ piece on display or an open launch request** (the dialog says so before the
 server does). Sales analysis does not use this list: its showroom filter is the
 venue each Houzs order was placed at.
 
-**Ten things that will bite you:**
+**Eleven things that will bite you:**
+- 🔑 **One save of the New product form can file several launch requests**
+  (owner 2026-11-12). Its Showroom field ticks any number of showrooms
+  (`ShowroomsPicker`), and it is still **one request per showroom** — each has
+  its own card, its own piece to replace and its own Arrive. So
+  `POST /marketing/requests` takes `destinations: [{ venueId, replaceId }]` and
+  writes a row for each in ONE insert: all of them or none, the photo once per
+  row (12 MB a save). One showroom still travels as `venueId` + `replaceId`,
+  and a several-showroom body carries **no `venueId`** on purpose — an API that
+  does not know `destinations` must refuse it, not file the first showroom
+  alone and say it saved. Add / Replace is the same for every showroom ticked.
+  A saved request stays one showroom's: its form keeps the single select and
+  `PUT` refuses more than one. In the draft the extra showrooms are `alsoTo` —
+  go through `destinationsOf` / `destinationFields` (`marketing-model.ts`),
+  never `showroomId` alone, or the second showroom is silently dropped.
 - 🔑 **`source_request_id` on a display no longer means "Arrive made it".**
   ⋯ › Duplicate from… (owner 2026-10-10, both the New product and the Add on
   display forms) fills a form from a piece on display or a launch request —
