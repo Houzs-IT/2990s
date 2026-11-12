@@ -16,8 +16,8 @@
 -- back, changes nothing) while any other column holds a KN01..KN13 value.
 --
 -- What it rewrites: whole values only — a text column equal to 'KN01', a json
--- string "KN01" (value or key), an array element 'KN01'. Never free text
--- ("FABRIC KN-12", remarks): that is what was printed or sent.
+-- string "KN01" (value or key), an array element 'KN01'. Free text
+-- ("FABRIC KN-12", remarks) stays as printed, unless the SWITCH below is 'on'.
 -- Houzs: company 2 rows only. 2990s: every row (single company).
 --
 -- How: one transaction, two passes (KNxx → zzKNRENUMxx → new KNxx), so the
@@ -28,6 +28,17 @@
 
 BEGIN;
 
+-- ═══════════════════════════════ SWITCH ════════════════════════════════
+-- 'off' (default): description2 keeps its text as printed.
+-- 'on': ALSO renumber KN codes inside description2 on the four Houzs item
+--       tables (SO / PO / consignment order / consignment receive lines),
+--       company 2 only, whole tokens only ("KN01", "KN-01"; never "KN013",
+--       "KN01A"). Read step 1b's output before turning it on: a supplier code
+--       such as "(KN10-2)" WOULD be renumbered too.
+CREATE TEMP TABLE kn_switch ON COMMIT DROP AS
+SELECT 'off'::text AS renumber_description2;   -- ← 'off' or 'on'
+-- ═══════════════════════════════════════════════════════════════════════
+
 CREATE TEMP TABLE kn_map (old_code text PRIMARY KEY, new_code text UNIQUE, colour text) ON COMMIT DROP;
 INSERT INTO kn_map VALUES
   ('KN06','KN01','Pearl'),  ('KN07','KN02','Sand'),    ('KN09','KN03','Desert'),
@@ -36,21 +47,34 @@ INSERT INTO kn_map VALUES
   ('KN03','KN10','Navy'),   ('KN05','KN11','Grey'),    ('KN04','KN12','Nobel'),
   ('KN02','KN13','Shadow');
 
--- The reviewed list: (database, table, column). Fill from step 1's output.
--- A listed column that does not exist is skipped and reported, not an error.
+-- The reviewed list: (database, table, column) — from step 1's output, run
+-- by YH on 12 Nov 2026 in both databases. Every listed Houzs table has
+-- company_id. A listed column that does not exist is skipped and reported.
 CREATE TEMP TABLE kn_target (db text, tbl text, col text) ON COMMIT DROP;
 INSERT INTO kn_target VALUES
-  -- Houzs (schema scm, company 2) — seen in Houzs code; CONFIRM against step 1
+  -- Houzs (schema scm, company 2): the colour itself …
   ('houzs','fabric_colours','fabric_id'),   ('houzs','fabric_colours','colour_id'),
   ('houzs','fabric_library','id'),          ('houzs','fabric_library','label'),
-  ('houzs','fabric_library','fabric_code'),
   ('houzs','fabric_trackings','id'),        ('houzs','fabric_trackings','fabric_code'),
-  ('houzs','mfg_sales_order_items','variants'),
   ('houzs','product_models','allowed_options'),
-  ('houzs','hr_item_kpi','ref'),         ('houzs','hr_item_kpi','label'),
-  -- 2990s (schema public) — KPI rules added 9 Nov + the fabric_library backfill
-  ('2990s','hr_item_kpi','ref'),         ('2990s','hr_item_kpi','label'),
-  ('2990s','fabric_library','id'),          ('2990s','fabric_library','label');
+  ('houzs','hr_item_kpi','ref'),            ('houzs','hr_item_kpi','label'),
+  ('houzs','product_request_lines','fabric_code'),
+  -- … the lines that picked it …
+  ('houzs','mfg_sales_order_items','variants'),
+  ('houzs','purchase_order_items','variants'),
+  ('houzs','purchase_consignment_order_items','variants'),
+  ('houzs','purchase_consignment_receive_items','variants'),
+  -- … and saved snapshots of those (so an old revision / MRP run reads the same colour)
+  ('houzs','so_revisions','snapshot'),
+  ('houzs','mrp_snapshots','result'),       ('houzs','mrp_list_snapshots','result'),
+  -- 2990s (schema public): KPI rules + Marketing
+  ('2990s','hr_item_kpi','ref'),            ('2990s','hr_item_kpi','label'),
+  ('2990s','marketing_displays','fabric'),  ('2990s','marketing_launch_requests','fabric');
+
+-- description2 (only when the switch is 'on'): Houzs, these four tables.
+CREATE TEMP TABLE kn_desc2 (tbl text) ON COMMIT DROP;
+INSERT INTO kn_desc2 VALUES ('mfg_sales_order_items'), ('purchase_order_items'),
+  ('purchase_consignment_order_items'), ('purchase_consignment_receive_items');
 
 DROP TABLE IF EXISTS kn_log;
 CREATE TEMP TABLE kn_log (tbl text, col text, kind text, row_updates int, note text);  -- a json row holding 3 codes counts 3
@@ -62,6 +86,7 @@ DECLARE
   sch text   := CASE WHEN is2990 THEN 'public' ELSE 'scm' END;
   co  bigint := CASE WHEN is2990 THEN NULL ELSE 2 END;
   r record; m record; pass int; n int; total int; scope text; unlisted text := '';
+  desc2_on boolean := (SELECT renumber_description2 = 'on' FROM kn_switch);
   codes text := '''KN01'',''KN02'',''KN03'',''KN04'',''KN05'',''KN06'',''KN07'',''KN08'',''KN09'',''KN10'',''KN11'',''KN12'',''KN13''';
 BEGIN
   IF NOT is2990 AND to_regnamespace('scm') IS NULL THEN
@@ -109,7 +134,28 @@ BEGIN
     FROM kn_target t
    WHERE t.db = v_db AND NOT EXISTS (SELECT 1 FROM kn_cols c WHERE c.tbl = t.tbl AND c.col = t.col);
 
-  -- 2. Two passes: old → temporary token, then token → new.
+  -- 2. Foreign keys that point at, or from, a listed column (Houzs:
+  --    fabric_colours.fabric_id and product_fabrics.fabric_id → fabric_library.id,
+  --    NOT deferrable, ON UPDATE NO ACTION) would refuse the first UPDATE. Drop
+  --    them for the swap and add them back, same name and definition, before
+  --    COMMIT — re-adding re-checks every row.
+  CREATE TEMP TABLE kn_fk ON COMMIT DROP AS
+  SELECT DISTINCT con.conname::text AS conname, con.conrelid::regclass::text AS on_tbl,
+         pg_get_constraintdef(con.oid) AS def
+    FROM pg_constraint con
+    JOIN kn_target t ON t.db = v_db
+    JOIN pg_class cl ON cl.relname = t.tbl
+    JOIN pg_namespace ns ON ns.oid = cl.relnamespace AND ns.nspname = sch
+    JOIN pg_attribute a ON a.attrelid = cl.oid AND a.attname = t.col
+   WHERE con.contype = 'f'
+     AND ((con.conrelid = cl.oid AND a.attnum = ANY (con.conkey))
+       OR (con.confrelid = cl.oid AND a.attnum = ANY (con.confkey)));
+  FOR r IN SELECT * FROM kn_fk LOOP
+    EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.on_tbl, r.conname);
+    INSERT INTO kn_log VALUES (r.on_tbl, r.conname, 'foreign key', 0, 'dropped for the swap, added back below');
+  END LOOP;
+
+  -- 3. Two passes: old → temporary token, then token → new.
   FOR pass IN 1..2 LOOP
     FOR r IN SELECT c.* FROM kn_cols c JOIN kn_target t ON t.tbl = c.tbl AND t.col = c.col AND t.db = v_db LOOP
       scope := CASE WHEN co IS NOT NULL THEN format(' AND company_id = %s', co) ELSE '' END;
@@ -129,9 +175,30 @@ BEGIN
       END LOOP;
       IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, r.col, r.kind, total, NULL); END IF;
     END LOOP;
+
+    -- The switch: description2, whole tokens, keeping the "KN-01" / "KN01" form.
+    IF desc2_on AND co IS NOT NULL THEN
+      FOR r IN SELECT d.tbl FROM kn_desc2 d JOIN kn_cols c ON c.tbl = d.tbl AND c.col = 'description2' AND c.has_co LOOP
+        total := 0;
+        FOR m IN SELECT CASE pass WHEN 1 THEN 'KN' ELSE 'zzKNRENUM' END || '(-?)' ||
+                        substr(CASE pass WHEN 1 THEN old_code ELSE new_code END, 3) AS f,
+                        CASE pass WHEN 1 THEN 'zzKNRENUM' ELSE 'KN' END || '\1' || substr(new_code, 3) AS t
+                   FROM kn_map LOOP
+          EXECUTE format('UPDATE %I.%I SET description2 = regexp_replace(description2, %L, %L, ''g'') WHERE description2 ~ %L AND company_id = %s',
+                         sch, r.tbl, '\m' || m.f || '\M', m.t, '\m' || m.f || '\M', co);
+          GET DIAGNOSTICS n = ROW_COUNT;
+          total := total + n;
+        END LOOP;
+        IF pass = 2 THEN INSERT INTO kn_log VALUES (r.tbl, 'description2', 'free text (switch on)', total, NULL); END IF;
+      END LOOP;
+    END IF;
   END LOOP;
 
-  -- 3. The colour list follows the new numbers: hand the 13 rows' existing
+  FOR r IN SELECT * FROM kn_fk LOOP
+    EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.on_tbl, r.conname, r.def);
+  END LOOP;
+
+  -- 4. The colour list follows the new numbers: hand the 13 rows' existing
   --    sort_order values out again in KN01..KN13 order (Houzs picker order).
   IF to_regclass(format('%I.fabric_colours', sch)) IS NOT NULL THEN
     EXECUTE format($q$
@@ -144,7 +211,7 @@ BEGIN
       sch, codes, CASE WHEN co IS NOT NULL THEN format(' AND company_id = %s', co) ELSE '' END, sch);
   END IF;
 
-  -- 4. Proof before COMMIT. KN number = EM number on every EMBRACE converter row …
+  -- 5. Proof before COMMIT. KN number = EM number on every EMBRACE converter row …
   IF EXISTS (SELECT 1 FROM kn_cols WHERE tbl = 'fabric_trackings' AND col = 'fabric_description') THEN
     EXECUTE format($q$SELECT count(*) FROM %I.fabric_trackings
                        WHERE upper(coalesce(series, '')) = 'EMBRACE' AND fabric_code IN (%s)%s
