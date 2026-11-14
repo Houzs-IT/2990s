@@ -250,6 +250,31 @@ describe('CommissionTab', () => {
     expect(screen.getAllByText('RM 150.00').length).toBeGreaterThan(0);
   });
 
+  it('says which quantity tier lifted a KPI amount, and the base it replaced', () => {
+    /* Owner 2026-11-15: every unit pays the step the period's count reached, so
+       "12 × RM 60" must say why it is not the rule's RM 40. */
+    const base = report();
+    const scarlett = base.showrooms[0]!.rows[0]!;
+    mockReport(report({
+      showrooms: [{
+        ...base.showrooms[0]!,
+        rows: [{
+          ...scarlett,
+          itemKpiCenti: 72_000,
+          kpiDetail: [{
+            label: 'EMBRACE', qty: 12, bonusCenti: 6_000, lineCenti: 72_000,
+            tier: { aboveQty: 10, baseBonusCenti: 4_000 },
+            orders: [{ docNo: '2990-SO-2611-004', qty: 12, lineCenti: 72_000 }],
+          }],
+        }],
+      }],
+    }));
+    render(<CommissionTab canManage />);
+    fireEvent.click(within(screen.getByText('Scarlett').closest('tr')!).getByRole('button'));
+    expect(screen.getByText('12 × RM 60.00', { selector: 'div > span' })).toBeInTheDocument();
+    expect(screen.getByText('more than 10 sold · base RM 40.00')).toBeInTheDocument();
+  });
+
   it('refuses to calculate an inverted date range', () => {
     mockReport(report());
     render(<CommissionTab canManage />);

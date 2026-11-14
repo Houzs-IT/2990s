@@ -31,8 +31,6 @@ import { useQueries } from '@tanstack/react-query';
 import {
   computeChainCommission,
   computeShowroomCommission,
-  firingFlags,
-  unitKpiCenti,
   unitKpiExcludedCenti,
   type CommissionConfig,
   type CommissionRow,
@@ -43,7 +41,10 @@ import { fabricTierAddon, type FabricTier, type FabricTierModelOverride } from '
 import { resolveFabricTierOverride } from '@2990s/shared';
 import { authedFetch } from './apiClient';
 import { readMoney } from './houzs-money-keys';
-import { buildKpiUnits, flagsInForce, type CommissionLine, type UnitContext } from './commission-kpi-units';
+import {
+  buildKpiUnits, flagsInForce, settleKpiTallies, tallyKpiUnits,
+  type CommissionKpiDetail, type CommissionLine, type KpiTallies, type UnitContext,
+} from './commission-kpi-units';
 import {
   useCommissionConfig, useCommissionKpiItems, useCommissionOverrideLevels,
   useCommissionProfiles, usePayoutPeriod,
@@ -54,6 +55,8 @@ import {
   useCompartmentFabricTierOverrides, useFabricLibrary, useFabricTierAddonConfig,
   useMfgCatalog, useModelFabricTierOverrides,
 } from './queries';
+import { describeKpiRule } from './kpi-rule-targets';
+import { useKpiTargets } from './kpi-rule-targets-queries';
 
 /* ── SO item lines ─────────────────────────────────────────────────────────── */
 
@@ -115,18 +118,9 @@ export const compartmentOf = (itemCode: string): string | null => {
 
 /* ── the report ────────────────────────────────────────────────────────────── */
 
-/** One KPI rule's contribution to a person's pay, and the orders it came from.
- *  Loo 2026-08-31: "我要它的 dropdown 这一边可以看到 Sales Order Number，这样我
- *  知道它是哪一个 Sales Order" — a bonus of "12 × RM 50" is not checkable until
- *  you can see WHICH twelve. */
-export interface CommissionKpiDetail {
-  label: string;
-  qty: number;
-  bonusCenti: number;
-  lineCenti: number;
-  /** The orders that earned it, newest doc_no first. */
-  orders: Array<{ docNo: string; qty: number; lineCenti: number }>;
-}
+/** One KPI rule's contribution to a person's pay, and the orders it came from —
+ *  built by settleKpiTallies (commission-kpi-units.ts, pure and tested). */
+export type { CommissionKpiDetail };
 
 export interface CommissionReportRow extends CommissionRow {
   staffName: string;
@@ -174,6 +168,10 @@ export function useCommissionReport(from: string, to: string) {
   const addonCfgQ = useFabricTierAddonConfig();
   const modelOvrQ = useModelFabricTierOverrides();
   const compOvrQ = useCompartmentFabricTierOverrides();
+  /* What to CALL each rule (EMBRACE, not EM) and whether its refs still exist.
+     Display only: it never gates the payout, so it is not in isLoading — a
+     report waits for money, not for names, and falls back to the stored label. */
+  const targets = useKpiTargets();
 
   const orders: CommissionOrder[] = useMemo(() => revenueQ.data?.orders ?? [], [revenueQ.data]);
   const docNos = useMemo(() => [...new Set(orders.map((o) => o.docNo))], [orders]);
@@ -223,18 +221,26 @@ export function useCommissionReport(from: string, to: string) {
 
     const bonusByStaff = new Map<string, number>();
     const excludedByStaff = new Map<string, number>();
-    /* staff -> flag key -> the running total, plus a per-ORDER breakdown so the
-       screen can name the sales orders a bonus came from. */
-    type DetailAcc = Omit<CommissionKpiDetail, 'orders'> & {
-      orders: Map<string, { qty: number; lineCenti: number }>;
-    };
-    const detailByStaff = new Map<string, Map<string, DetailAcc>>();
+    /* staff -> rule -> units counted over the WHOLE period, per order. A
+       quantity tier (v4) is judged on that count, so nothing is paid until
+       every order has been counted — see settleKpiTallies. */
+    const tallies: KpiTallies = new Map();
+    const detailByStaff = new Map<string, CommissionKpiDetail[]>();
     const unresolved = new Set<string>();
+
+    /* What each rule is called today — its series, not the code it was saved
+       under — falling back to the stored label while the sources load. */
+    const itemById = new Map(activeItems.map((k) => [k.id, k]));
+    const nameOf = (k: CommissionKpiItem): string =>
+      targets.ready[k.flagType] ? describeKpiRule(k, targets.options).name : (k.label || k.ref);
+    const labelOfFlag = (f: ItemKpiFlag): string => {
+      const k = f.id ? itemById.get(f.id) : undefined;
+      return k ? nameOf(k) : f.ref;
+    };
 
     if (activeFlags.length > 0) {
       const salespersonOf = new Map(orders.map((o) => [o.docNo, o.salespersonId]));
       const soDateOf = new Map(orders.map((o) => [o.docNo, o.soDate]));
-      const labelOf = new Map((kpiQ.data ?? []).map((k) => [`${k.flagType}:${k.ref}`, k.label || k.ref]));
 
       for (const q of lineQs) {
         const payload = q.data;
@@ -246,36 +252,34 @@ export function useCommissionReport(from: string, to: string) {
         const { units, unresolvedFabric } = buildKpiUnits(payload.lines, ctx);
         unresolvedFabric.forEach((c) => unresolved.add(c));
 
+        // The exclusion is per unit and never depends on a tier.
         for (const u of units) {
-          const bonus = unitKpiCenti(u, flags);
           const excluded = unitKpiExcludedCenti(u, flags);
-          if (bonus > 0) bonusByStaff.set(sp, (bonusByStaff.get(sp) ?? 0) + bonus);
           if (excluded > 0) excludedByStaff.set(sp, (excludedByStaff.get(sp) ?? 0) + excluded);
-          if (bonus <= 0) continue;
-          /* firingFlags, not the raw list: a category rule suppressed by a
-             product rule paid nothing, so it must not appear in a breakdown
-             that has to sum back to `bonus`. */
-          for (const f of firingFlags(u, flags)) {
-            const key = `${f.flagType}:${f.ref}`;
-            const m = detailByStaff.get(sp) ?? new Map<string, DetailAcc>();
-            const prev: DetailAcc = m.get(key) ?? {
-              label: labelOf.get(key) ?? f.ref,
-              qty: 0, bonusCenti: f.bonusCenti, lineCenti: 0,
-              orders: new Map(),
-            };
-            const earned = u.qty * f.bonusCenti;
-            prev.qty += u.qty;
-            prev.lineCenti += earned;
-            /* Per order, so a "12 × RM 50" line can be traced to the twelve.
-               One order can contribute several units, hence the accumulate. */
-            const o = prev.orders.get(payload.docNo) ?? { qty: 0, lineCenti: 0 };
-            o.qty += u.qty;
-            o.lineCenti += earned;
-            prev.orders.set(payload.docNo, o);
-            m.set(key, prev);
-            detailByStaff.set(sp, m);
-          }
         }
+        /* firingFlags inside: a category rule suppressed by a product rule
+           counts nothing, so it can neither pay nor reach a tier. */
+        tallyKpiUnits(tallies, sp, payload.docNo, units, flags);
+      }
+
+      for (const [sp, byRule] of tallies) {
+        const { bonusCenti, detail } = settleKpiTallies(byRule, labelOfFlag);
+        if (bonusCenti > 0) bonusByStaff.set(sp, bonusCenti);
+        detailByStaff.set(sp, detail);
+      }
+
+      /* A rule naming codes that no longer exist ANYWHERE in the catalogue or
+         fabric library, which also matched nothing in the period, paid RM 0 —
+         and looked exactly like a rule nobody happened to sell. That is how the
+         EMBRACE rules stopped paying unnoticed when Houzs renamed KN01–KN13 to
+         EM-01–EM-13 on 2026-11-13 (and moved every order line with them). */
+      const stale = activeItems.filter((k) =>
+        targets.ready[k.flagType]
+        && describeKpiRule(k, targets.options).state === 'missing'
+        && ![...tallies.values()].some((byRule) => byRule.has(k.id)));
+      if (stale.length > 0) {
+        const names = stale.map((k) => nameOf(k));
+        warnings.push(`${stale.length === 1 ? 'A KPI item names a code' : `${stale.length} KPI items name codes`} no longer in the catalogue or fabric library, and no order in this period matched ${stale.length === 1 ? 'it' : 'them'}, so ${stale.length === 1 ? 'it' : 'they'} paid nothing: ${names.slice(0, 6).join(', ')}${names.length > 6 ? ` +${names.length - 6} more` : ''}. If the codes were renamed, add the rule again on the current series in Setup ▸ KPI items.`);
       }
     }
 
@@ -345,18 +349,11 @@ export function useCommissionReport(from: string, to: string) {
             inputs.map((p) => ({ ...p, goodsByLevel: new Map<number, number>() })))
         : computeShowroomCommission(engineConfig, showroomGoodsCenti, inputs);
 
-      const nameOf = new Map(people.map((p) => [p.staffId, p.staffName]));
+      const staffNameOf = new Map(people.map((p) => [p.staffId, p.staffName]));
       const rows: CommissionReportRow[] = computed.map((r) => ({
         ...r,
-        staffName: nameOf.get(r.staffId) ?? '',
-        kpiDetail: [...(detailByStaff.get(r.staffId)?.values() ?? [])].map((d) => ({
-          label: d.label, qty: d.qty, bonusCenti: d.bonusCenti, lineCenti: d.lineCenti,
-          /* Newest first — doc numbers are date-ordered by construction
-             (2990-SO-YYMM-NNN), so a plain reverse sort is chronological. */
-          orders: [...d.orders.entries()]
-            .map(([docNo, v]) => ({ docNo, ...v }))
-            .sort((a, b) => b.docNo.localeCompare(a.docNo)),
-        })),
+        staffName: staffNameOf.get(r.staffId) ?? '',
+        kpiDetail: detailByStaff.get(r.staffId) ?? [],
       }));
       // managers first, then sales; stable within tier.
       rows.sort((a, b) => (a.tier === 'manager' ? 0 : 1) - (b.tier === 'manager' ? 0 : 1));
@@ -388,15 +385,22 @@ export function useCommissionReport(from: string, to: string) {
     isLoading, error, configQ.data, profilesQ.data, kpiQ.data, levelsQ.data,
     revenueQ.data, catalogQ.data, fabricsQ.data, addonCfgQ.data, modelOvrQ.data,
     compOvrQ.data, activeItems, activeFlags, orders, from, to,
+    targets.options, targets.ready,
   ]);
 
   return { report, closed: closedQ.data ?? null, isLoading, error };
 }
 
+/* `id` keys the period count a quantity tier is judged on; `refs` is the whole
+   series a rule covers. Dropping either here would pay a v4 rule as if it were
+   v3 — on its first library id only, at its base amount. */
 const toFlag = (k: CommissionKpiItem): ItemKpiFlag => ({
+  id: k.id,
   flagType: k.flagType,
   ref: k.ref,
+  refs: k.refs,
   bonusCenti: k.bonusCenti,
+  qtyTiers: k.qtyTiers,
   countsAsRevenue: k.countsAsRevenue,
 });
 

@@ -3210,6 +3210,10 @@ export const hrItemKpi = pgTable('hr_item_kpi', {
   label:      text('label').notNull().default(''),
   bonusCenti: integer('bonus_centi').notNull().default(0),
   effectiveFrom: date('effective_from'),   // 0226 — null = always applied
+  // 0227 — a series over several refs ('{}' = just `ref`), and quantity tiers
+  // [{aboveQty, bonusCenti}] ('[]' = flat). See @2990s/shared/hr-commission.
+  refs:       text('refs').array().notNull().default(sql`'{}'::text[]`),
+  qtyTiers:   jsonb('qty_tiers').notNull().default(sql`'[]'::jsonb`),
   active:     boolean('active').notNull().default(true),
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

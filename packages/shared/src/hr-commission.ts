@@ -23,8 +23,13 @@ export type HrTier = 'sales' | 'manager';
  *      than v2 on purpose: "v2" already names the Houzs engine, and two
  *      different arithmetics sharing one version string is exactly the
  *      confusion the stamp exists to prevent.
+ * v4 = v3 plus item-KPI QUANTITY TIERS (owner 2026-11-15) — the amount per unit
+ *      steps up once a salesperson's units under one rule pass a quantity in
+ *      the period, and the reached amount pays EVERY unit — and rules that
+ *      cover several refs (a named fabric series spans several library ids).
+ *      A rule with no tiers and one ref pays exactly what v3 paid.
  */
-export const COMMISSION_ENGINE_VERSION = 'v3';
+export const COMMISSION_ENGINE_VERSION = 'v4';
 
 /**
  * SO statuses that earn NO commission (owner 2026-07-17: "draft肯定不算").
@@ -277,10 +282,44 @@ export const computeChainCommission = (
  */
 export type HrFlagType = 'product' | 'category' | 'fabric' | 'special';
 
+/**
+ * One quantity step on an item-KPI rule (owner 2026-11-15: "这个 item 卖超过 5
+ * 个的话，本来是 40 块就会变成 50 块；超过 10 个 item 的话，50 块就会变成 60 块").
+ *
+ * ALL-UNITS, by the owner's ruling the same day: once a salesperson's units
+ * under the rule pass `aboveQty` in the period, EVERY unit pays `bonusCenti` —
+ * the first five included. 12 sold against "RM 40, >5 → RM 50, >10 → RM 60"
+ * pays 12 × RM 60, not 5 × 40 + 5 × 50 + 2 × 60.
+ */
+export interface KpiQtyTier {
+  /** The step applies when the period's units are MORE than this ("超过"). */
+  aboveQty: number;
+  /** The per-unit amount once the step is reached, paid on every unit. */
+  bonusCenti: number;
+}
+
+/** A rule carries at most this many quantity steps. */
+export const MAX_KPI_QTY_TIERS = 5;
+
 export interface ItemKpiFlag {
   flagType: HrFlagType;
   ref: string;
+  /** Base amount per unit — what the rule pays until a quantity tier is
+   *  reached, and all it ever pays when it has none. */
   bonusCenti: number;
+  /** The rule's identity (hr_item_kpi.id): the key a period's units are
+   *  counted under for its quantity tiers. Absent → `${flagType}:${ref}`. */
+  id?: string;
+  /**
+   * Everything the rule pays on, when that is more than `ref`. A named fabric
+   * series (EMBRACE, MONZA …) can span several fabric library ids, and its
+   * quantity tiers must count them as ONE rule — five MONZA-HL sofas and one
+   * MONZA-FL are six MONZA sofas, not five and one. Empty / absent = [ref],
+   * which is every rule written before v4.
+   */
+  refs?: string[];
+  /** Quantity steps — see KpiQtyTier. Empty / absent = a flat `bonusCenti`. */
+  qtyTiers?: KpiQtyTier[];
   /**
    * THE 2026-08-31 OPTION (Loo): "有一些 KPI item 它有一个 option，就是它可以
    * 同时算 product revenue … product revenue 也会拿到 commission，但同样的，
@@ -306,6 +345,16 @@ export interface ItemKpiFlag {
   countsAsRevenue?: boolean;
 }
 
+/** Everything a rule pays on: its `refs`, or just its `ref` for a rule written
+ *  before v4. The ONE reading of the two fields, so no caller can match on
+ *  `ref` alone and silently miss the rest of a series. */
+export const kpiRefsOf = (f: Pick<ItemKpiFlag, 'ref' | 'refs'>): string[] =>
+  f.refs && f.refs.length > 0 ? f.refs : [f.ref];
+
+/** The key one rule's units are counted under in a period. */
+export const kpiFlagKey = (f: Pick<ItemKpiFlag, 'id' | 'flagType' | 'ref'>): string =>
+  f.id ?? `${f.flagType}:${f.ref}`;
+
 export interface KpiLine {
   itemCode: string;
   qty: number;
@@ -314,14 +363,16 @@ export interface KpiLine {
 }
 
 /** Bonus earned by one order line against the active flags (qty × amount).
- *  Line-level, pre-dating the unit model below; kept for the legacy API path. */
+ *  Line-level, pre-dating the unit model below; kept for the legacy API path.
+ *  Base amounts only — quantity tiers are a PERIOD rule (kpiRuleBonusCenti). */
 export const lineKpiCenti = (line: KpiLine, flags: ItemKpiFlag[]): number => {
   let total = 0;
   for (const f of flags) {
+    const refs = kpiRefsOf(f);
     const matched =
-      (f.flagType === 'product' && line.itemCode === f.ref) ||
-      (f.flagType === 'fabric' && line.fabricId === f.ref) ||
-      (f.flagType === 'special' && line.specialCodes.includes(f.ref));
+      (f.flagType === 'product' && refs.includes(line.itemCode)) ||
+      (f.flagType === 'fabric' && line.fabricId != null && refs.includes(line.fabricId)) ||
+      (f.flagType === 'special' && line.specialCodes.some((c) => refs.includes(c)));
     if (matched) total += line.qty * f.bonusCenti;
   }
   return total;
@@ -373,12 +424,16 @@ export interface KpiUnit {
 const flagMatchesUnit = (
   f: ItemKpiFlag,
   u: Pick<KpiUnit, 'itemCodes' | 'category' | 'fabricId' | 'specialCodes'>,
-): boolean =>
-  (f.flagType === 'product' && u.itemCodes.includes(f.ref)) ||
-  // NULL / absent category never matches — see KpiUnit.category.
-  (f.flagType === 'category' && u.category != null && u.category === f.ref) ||
-  (f.flagType === 'fabric' && u.fabricId === f.ref) ||
-  (f.flagType === 'special' && u.specialCodes.includes(f.ref));
+): boolean => {
+  const refs = kpiRefsOf(f);
+  return (
+    (f.flagType === 'product' && u.itemCodes.some((c) => refs.includes(c))) ||
+    // NULL / absent category never matches — see KpiUnit.category.
+    (f.flagType === 'category' && u.category != null && refs.includes(u.category)) ||
+    (f.flagType === 'fabric' && u.fabricId != null && refs.includes(u.fabricId)) ||
+    (f.flagType === 'special' && u.specialCodes.some((c) => refs.includes(c)))
+  );
+};
 
 /**
  * PRECEDENCE: a product rule BEATS a category rule on the same unit.
@@ -398,7 +453,7 @@ const flagMatchesUnit = (
  * and nothing overlaps.
  */
 const categorySuppressed = (u: Pick<KpiUnit, 'itemCodes'>, flags: ItemKpiFlag[]): boolean =>
-  flags.some((f) => f.flagType === 'product' && u.itemCodes.includes(f.ref));
+  flags.some((f) => f.flagType === 'product' && u.itemCodes.some((c) => kpiRefsOf(f).includes(c)));
 
 /** The flags that actually FIRE on this unit, after precedence. The one list
  *  every figure below derives from, so the bonus, the goods exclusion and the
@@ -426,10 +481,17 @@ export const kpiFlagFiresOnUnit = (
   f: ItemKpiFlag,
   u: Pick<KpiUnit, 'itemCodes' | 'category' | 'fabricId' | 'specialCodes'>,
   flags: ItemKpiFlag[],
-): boolean => firingFlags(u, flags).some((x) => x.flagType === f.flagType && x.ref === f.ref);
+): boolean => firingFlags(u, flags).some((x) => kpiFlagKey(x) === kpiFlagKey(f));
 
-/** Fixed item-KPI bonus earned by one unit (qty × amount, summed over the flags
- *  that FIRE — so a category rule suppressed by a product rule pays nothing).
+/** Fixed item-KPI bonus earned by one unit at the BASE amounts (qty × amount,
+ *  summed over the flags that FIRE — so a category rule suppressed by a product
+ *  rule pays nothing).
+ *
+ *  ⚠️ Base amounts only. A quantity tier depends on every unit the salesperson
+ *  sold under the rule in the period, which one unit cannot see — a caller
+ *  paying a period counts each firing rule's units and settles them with
+ *  `kpiRuleBonusCenti` instead (the POS does). This stays for the legacy API
+ *  path, which predates tiers.
  *
  *  `countsAsRevenue` does NOT appear here: that option changes whether the
  *  revenue is also kept, never whether the bonus is earned. */
@@ -437,6 +499,83 @@ export const unitKpiCenti = (u: KpiUnit, flags: ItemKpiFlag[]): number => {
   let total = 0;
   for (const f of firingFlags(u, flags)) total += u.qty * f.bonusCenti;
   return total;
+};
+
+// ── quantity tiers (v4, owner 2026-11-15) ────────────────────────────────────
+// A rule's tiers are settled over a PERIOD: every unit one salesperson sold
+// under the rule (after precedence and the rule's start date) is counted, the
+// count picks the step, and the step's amount pays every one of those units.
+// The goods exclusion does not change with a tier — it is the add-on (or the
+// unit) the rule removes from goods, whatever the bonus on it.
+
+/** The steps in the order they apply. Anything malformed is dropped here, so a
+ *  stored row the API would refuse can never move a payout either way. */
+export const sortedQtyTiers = (tiers: readonly KpiQtyTier[] | null | undefined): KpiQtyTier[] =>
+  [...(tiers ?? [])]
+    .filter((t) =>
+      Number.isInteger(t.aboveQty) && t.aboveQty >= 1
+      && Number.isInteger(t.bonusCenti) && t.bonusCenti >= 0)
+    .sort((a, b) => a.aboveQty - b.aboveQty);
+
+/**
+ * The per-unit amount a rule pays when `qty` units fired under it in the
+ * period, and the step that set it (null = the base amount).
+ *
+ * "More than": with a step at 5, the fifth unit still pays the base and the
+ * sixth lifts all six — the owner's own wording, "卖超过 5 个".
+ */
+export const kpiTierAt = (
+  f: Pick<ItemKpiFlag, 'bonusCenti' | 'qtyTiers'>,
+  qty: number,
+): { bonusCenti: number; tier: KpiQtyTier | null } => {
+  let tier: KpiQtyTier | null = null;
+  for (const t of sortedQtyTiers(f.qtyTiers)) if (qty > t.aboveQty) tier = t;
+  return { bonusCenti: tier ? tier.bonusCenti : f.bonusCenti, tier };
+};
+
+/** What a rule pays for `qty` units in one period: every unit at the amount
+ *  the count reached. */
+export const kpiRuleBonusCenti = (
+  f: Pick<ItemKpiFlag, 'bonusCenti' | 'qtyTiers'>,
+  qty: number,
+): number => (qty > 0 ? qty * kpiTierAt(f, qty).bonusCenti : 0);
+
+/**
+ * Why a set of tiers cannot be saved on a rule paying `baseBonusCenti`, or null.
+ * One rule, read by the API (which refuses), the Setup form (which explains)
+ * and nothing else — the engine only ever sorts what was accepted.
+ *
+ * Each step must pay MORE than the one below it. Under all-units a step paying
+ * less would make one more sale shrink the whole payout — selling the sixth
+ * unit would cut the pay on the first five — and the likelier story behind
+ * such a row is a typo (5 for 50).
+ */
+export const qtyTiersError = (
+  baseBonusCenti: number,
+  tiers: readonly KpiQtyTier[],
+): string | null => {
+  if (tiers.length > MAX_KPI_QTY_TIERS) return `A rule can have at most ${MAX_KPI_QTY_TIERS} quantity tiers.`;
+  for (const t of tiers) {
+    if (!Number.isInteger(t.aboveQty) || t.aboveQty < 1) {
+      return 'Each tier starts after a whole number of units, 1 or more.';
+    }
+    if (!Number.isInteger(t.bonusCenti) || t.bonusCenti <= 0) {
+      return 'Each tier needs an amount above RM 0.';
+    }
+  }
+  const sorted = [...tiers].sort((a, b) => a.aboveQty - b.aboveQty);
+  let previous = baseBonusCenti;
+  for (let i = 0; i < sorted.length; i++) {
+    const t = sorted[i]!;
+    if (i > 0 && t.aboveQty === sorted[i - 1]!.aboveQty) {
+      return `Two tiers both start after ${t.aboveQty} units — keep one.`;
+    }
+    if (t.bonusCenti <= previous) {
+      return `The tier for more than ${t.aboveQty} units must pay more than the step below it — otherwise selling more would pay less.`;
+    }
+    previous = t.bonusCenti;
+  }
+  return null;
 };
 
 /** Goods centi to EXCLUDE from this unit because it earns the fixed item-KPI
