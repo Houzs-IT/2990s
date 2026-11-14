@@ -26,7 +26,10 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { KpiQtyTier } from '@2990s/shared/hr-commission';
 import { bearerToken } from './apiClient';
+
+export type { KpiQtyTier };
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -61,8 +64,14 @@ export interface CommissionKpiItem {
   id: string;
   flagType: HrFlagType;
   ref: string;
+  /** 0227 — everything the rule pays on when more than `ref` (a fabric series
+   *  over several library ids). [] = just `ref`. */
+  refs: string[];
   label: string;
+  /** Base amount per unit — all a rule without tiers ever pays. */
   bonusCenti: number;
+  /** 0227 — quantity steps above the base, ascending (owner 2026-11-15). [] = flat. */
+  qtyTiers: KpiQtyTier[];
   /** THE OPTION (Loo 2026-08-31). False = earn the fixed amount INSTEAD of the
    *  percentage on the flagged portion. True = earn both, and the amount also
    *  still counts toward the RM 100k / RM 400k gates. */
@@ -200,27 +209,50 @@ export function useCommissionKpiItems() {
   return useQuery({
     queryKey: ['commission', 'item-kpi'],
     staleTime: 60_000,
-    queryFn: () => call<{ items: CommissionKpiItem[] }>('/item-kpi').then((r) => r.items),
+    queryFn: () => call<{ items: CommissionKpiItem[] }>('/item-kpi').then((r) => r.items.map((k) => ({
+      ...k,
+      /* An API deployed before 0227 answers without these. Read as the
+         pre-0227 meaning — just `ref`, a flat amount — never as undefined. */
+      refs: k.refs ?? [],
+      qtyTiers: k.qtyTiers ?? [],
+    }))),
   });
+}
+
+export interface CommissionKpiItemCreate {
+  flagType: HrFlagType;
+  ref: string;
+  refs: string[];
+  label: string;
+  bonusCenti: number;
+  qtyTiers: KpiQtyTier[];
+  countsAsRevenue: boolean;
+  effectiveFrom: string | null;
 }
 
 export function useCreateCommissionKpiItem() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: {
-      flagType: HrFlagType; ref: string; label: string;
-      bonusCenti: number; countsAsRevenue: boolean;
-    }) => send('/item-kpi', 'POST', body),
+    mutationFn: (body: CommissionKpiItemCreate) => send('/item-kpi', 'POST', body),
     onSuccess: invalidate(qc),
   });
+}
+
+/** What may change on a rule in place. Never its target — see the API. */
+export interface CommissionKpiItemPatch {
+  id: string;
+  label?: string;
+  bonusCenti?: number;
+  qtyTiers?: KpiQtyTier[];
+  countsAsRevenue?: boolean;
+  effectiveFrom?: string | null;
+  active?: boolean;
 }
 
 export function useUpdateCommissionKpiItem() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: {
-      id: string; label?: string; bonusCenti?: number; countsAsRevenue?: boolean; active?: boolean;
-    }) => send(`/item-kpi/${id}`, 'PATCH', body),
+    mutationFn: ({ id, ...body }: CommissionKpiItemPatch) => send(`/item-kpi/${id}`, 'PATCH', body),
     onSuccess: invalidate(qc),
   });
 }

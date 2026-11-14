@@ -5,17 +5,31 @@
 // earn RM 50" — as opposed to the percentage the rest of the scheme pays. What
 // it can target all comes from the live POS library, so the picker is the
 // catalogue, not a typed-in code:
-//   Product   → one SKU
-//   Category  → every item in a category (SOFA / BEDFRAME / MATTRESS / …)
-//   Fabric    → a fabric SERIES, not a colour
-//   Special   → a special-order add-on code
+//   Fabric series → a NAMED series (EMBRACE, HOMELY …), never a colour
+//   Special       → a special-order add-on
+//   Product       → one SKU
+//   Category      → every item in a category (Sofa / Bedframe / …)
+//
+// ── THE 2026-11-15 REVAMP (owner) ───────────────────────────────────────────
+// "为什么这个 fabric series 它不是显示 fabric series 的名字，而是这样乱码？" and
+// "help me revamp for this ui, is so messy currently". It read raw library
+// codes (MONS / EM / MONZA-HL-B01 …), a row per code, with every control
+// inline on every row. Now:
+//   · rules and the picker are named by series, resolved live
+//     (lib/kpi-rule-targets.ts), and a rule whose codes no longer exist says so;
+//   · one quiet row per rule, grouped by type, edited in a drawer
+//     (KpiRuleDrawer) — the add form and the toggles left the table;
+//   · QUANTITY TIERS: "这个 item 卖超过 5 个的话，本来是 40 块就会变成 50 块；
+//     超过 10 个 item 的话，50 块就会变成 60 块" — every unit pays the step the
+//     salesperson's count reached in the period (all-units, ruled the same
+//     day). The arithmetic is @2990s/shared/hr-commission (v4).
 //
 // ── THE OPTION THIS SCREEN EXISTS FOR (Loo 2026-08-31) ──────────────────────
 // "有一些 KPI item 它有一个 option，就是它可以同时算 product revenue …
 //  product revenue 也会拿到 commission，但同样的，它 KPI item 那边也会拿到
 //  special 的 KPI amount".
 //
-// OFF (the default, and every rule written before today): the fixed amount is
+// OFF (the default, and every rule written before it): the fixed amount is
 // earned INSTEAD of the percentage on the flagged portion, and that portion
 // leaves the goods the percentage runs on.
 // ON: earn BOTH — the fixed amount, and the portion stays in goods.
@@ -25,286 +39,152 @@
 // salesperson into the higher tier — and lift the WHOLE showroom, which raises
 // everyone in that room. The screen says so, because the form cannot show it.
 //
-// One more rule, enforced server-side and stated here because it is not
+// One more rule, enforced by the engine and stated here because it is not
 // guessable: PRODUCT BEATS CATEGORY. A SKU named by a product rule ignores any
 // category rule covering it, so one purchase never collects two bonuses.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
-import { AlertTriangle, Plus, Tag, Trash2 } from 'lucide-react';
-import {
-  useCommissionKpiItems, useCreateCommissionKpiItem, useDeleteCommissionKpiItem,
-  useUpdateCommissionKpiItem, type HrFlagType,
-} from '../../lib/commission-api';
-import { useFabricLibrary, useMfgCatalog, useSpecialAddons } from '../../lib/queries';
+import { useCallback, useMemo, useState } from 'react';
+import { AlertTriangle, ChevronRight, Pencil, Plus, Tag } from 'lucide-react';
+import { fmtDate } from '@2990s/shared';
+import { sortedQtyTiers, type HrFlagType } from '@2990s/shared/hr-commission';
+import { useCommissionKpiItems, type CommissionKpiItem } from '../../lib/commission-api';
 import { hrErrorMessage } from '../../lib/hr-wire';
-import { fmtSen, rmToSen } from '../../lib/commission-format';
-import styles from './Opex.module.css';
+import { fmtSen } from '../../lib/commission-format';
+import { describeKpiRule, type KpiRuleView } from '../../lib/kpi-rule-targets';
+import { useKpiTargets, type KpiTargets } from '../../lib/kpi-rule-targets-queries';
+import { KpiRuleDrawer, TYPE_LABEL, TYPE_ORDER } from './KpiRuleDrawer';
+import opex from './Opex.module.css';
+import styles from './KpiItems.module.css';
 
-const FLAG_LABEL: Record<HrFlagType, string> = {
-  product: 'Product',
-  category: 'Category',
-  fabric: 'Fabric series',
-  special: 'Special add-on',
+/** Where a missing ref was looked for, in the words of the screen it lives on. */
+const MISSING_WHERE: Record<HrFlagType, string> = {
+  fabric: 'Not in the fabric library',
+  special: 'Not an active add-on',
+  product: 'Not in the catalogue',
+  category: 'Not in the catalogue',
 };
-const FLAG_ORDER: HrFlagType[] = ['product', 'category', 'fabric', 'special'];
 
-interface PickerRef { ref: string; label: string }
+/** A rule's name and codes as they read TODAY — the stored label only while
+ *  the sources load, or when they could not be read. */
+const viewOf = (
+  rule: CommissionKpiItem,
+  options: KpiTargets['options'],
+  ready: KpiTargets['ready'],
+): KpiRuleView =>
+  ready[rule.flagType]
+    ? describeKpiRule(rule, options)
+    : { name: rule.label || rule.ref, detail: null, missing: [], state: 'ok' };
 
 export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
   const { data: items, isLoading, error } = useCommissionKpiItems();
-  const create = useCreateCommissionKpiItem();
-  const update = useUpdateCommissionKpiItem();
-  const remove = useDeleteCommissionKpiItem();
+  const targets = useKpiTargets();
+  /* null = closed · 'new' = a new rule · a rule = editing it. */
+  const [editing, setEditing] = useState<CommissionKpiItem | 'new' | null>(null);
 
-  /* The four pickers come from the POS's OWN catalogue queries, already cached
-     for the rest of the app — not from a bespoke endpoint. That also means this
-     screen survives the Houzs HR module being retired. */
-  const catalogQ = useMfgCatalog();
-  const fabricsQ = useFabricLibrary();
-  const specialsQ = useSpecialAddons();
+  const rules = useMemo(() => items ?? [], [items]);
+  const { options, ready } = targets;
+  const views = useMemo(
+    () => new Map(rules.map((r) => [r.id, viewOf(r, options, ready)])),
+    [rules, options, ready],
+  );
+  const nameOf = useCallback(
+    (r: CommissionKpiItem) => views.get(r.id)?.name ?? (r.label || r.ref),
+    [views],
+  );
 
-  const [flagType, setFlagType] = useState<HrFlagType>('fabric');
-  const [ref, setRef] = useState('');
-  const [bonusRm, setBonusRm] = useState('50');
-  const [countsAsRevenue, setCountsAsRevenue] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
+  /* One group per type, in the picker's order; active rules first, then by
+     name, so the live scheme reads top-down and the switched-off rest sinks. */
+  const groups = useMemo(() => TYPE_ORDER
+    .map((type) => ({
+      type,
+      rules: rules
+        .filter((r) => r.flagType === type)
+        .sort((a, b) => Number(b.active) - Number(a.active)
+          || nameOf(a).localeCompare(nameOf(b), undefined, { numeric: true, sensitivity: 'base' })),
+    }))
+    .filter((g) => g.rules.length > 0), [rules, nameOf]);
 
-  const pickers = useMemo(() => {
-    const catalog = catalogQ.data ?? [];
-    const products: PickerRef[] = catalog
-      .map((p) => ({ ref: p.code, label: `${p.code} — ${p.name}` }))
-      .sort((a, b) => a.ref.localeCompare(b.ref));
-    /* Categories are an enum on the product, not a table — derived from what the
-       catalogue actually contains so the picker can never offer a value no item
-       could carry. SERVICE is excluded: service lines are not goods and never
-       become KPI units. */
-    const categories: PickerRef[] = [...new Set(catalog.map((p) => p.category))]
-      .filter((cat) => cat !== 'SERVICE')
-      .sort()
-      .map((cat) => ({ ref: cat, label: cat }));
-    const fabrics: PickerRef[] = (fabricsQ.data ?? [])
-      .map((f) => ({ ref: f.id, label: f.label }));
-    const specials: PickerRef[] = (specialsQ.data ?? [])
-      .filter((s) => s.active)
-      .map((s) => ({ ref: s.code, label: s.label }));
-    return { product: products, category: categories, fabric: fabrics, special: specials };
-  }, [catalogQ.data, fabricsQ.data, specialsQ.data]);
+  if (isLoading) return <p className={opex.muted}>Loading…</p>;
+  if (error) return <p className={opex.error}>{hrErrorMessage(error)}</p>;
 
-  const pickersLoading = catalogQ.isLoading || fabricsQ.isLoading || specialsQ.isLoading;
-  const options = pickers[flagType];
-
-  /* A flagged thing that has left the catalogue still has a rule, and that rule
-     still pays. Showing the stored label (and flagging it) is the honest
-     rendering — the raw ref is what the engine matches on. */
-  const labelFor = (type: HrFlagType, r: string): string | null =>
-    pickers[type].find((o) => o.ref === r)?.label ?? null;
-
-  const add = async () => {
-    setAddError(null);
-    if (!ref) { setAddError('Pick what this KPI item applies to.'); return; }
-    const bonusCenti = rmToSen(Number(bonusRm));
-    if (!Number.isFinite(bonusCenti) || bonusCenti <= 0) {
-      setAddError('Enter the amount earned per unit sold — a KPI item paying RM 0 earns nothing.');
-      return;
-    }
-    try {
-      await create.mutateAsync({
-        flagType, ref,
-        label: options.find((o) => o.ref === ref)?.label ?? ref,
-        bonusCenti, countsAsRevenue,
-      });
-      setRef('');
-      setCountsAsRevenue(false);
-    } catch (e) {
-      setAddError(hrErrorMessage(e));
-    }
-  };
-
-  if (isLoading) return <p className={styles.muted}>Loading…</p>;
-  if (error) return <p className={styles.error}>{hrErrorMessage(error)}</p>;
-
-  const rows = items ?? [];
-  const bothCount = rows.filter((r) => r.active && r.countsAsRevenue).length;
+  const activeCount = rules.filter((r) => r.active).length;
+  const bothCount = rules.filter((r) => r.active && r.countsAsRevenue).length;
+  const cols = canManage ? 6 : 5;
 
   return (
-    <div className={styles.card}>
-      <div className={styles.cardHead}>
-        <h2 className={styles.cardTitle}>
+    <div className={opex.card}>
+      <div className={opex.cardHead}>
+        <h2 className={opex.cardTitle}>
           <Tag size={16} strokeWidth={1.75} /> KPI items
         </h2>
-        <span className={styles.chip}>{rows.filter((r) => r.active).length} active</span>
+        <span className={styles.headActions}>
+          <span className={opex.chip}>{activeCount} active</span>
+          {canManage && (
+            <button
+              type="button"
+              className={`${opex.btn} ${opex.btnPrimary}`}
+              onClick={() => setEditing('new')}
+            >
+              <Plus size={16} strokeWidth={1.75} /> New KPI item
+            </button>
+          )}
+        </span>
       </div>
-      <p className={styles.cardHint}>
-        A fixed amount earned for each unit sold, on top of the percentage scheme. A split sofa
-        counts once per built sofa, not once per module.
+      <p className={opex.cardHint}>
+        A fixed amount for each unit sold, on top of the percentage. A split sofa counts once per
+        built sofa. Quantity tiers count each salesperson&rsquo;s units over the period on the
+        Commission tab.
       </p>
 
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
+      <div className={opex.tableWrap}>
+        <table className={opex.table}>
           <thead>
             <tr>
-              <th>Type</th>
               <th>Applies to</th>
-              <th className={styles.num}>Amount each</th>
-              <th>Also counts as product revenue</th>
+              <th>Pays per unit</th>
+              <th>Starts</th>
+              <th>Product revenue</th>
               <th>Status</th>
-              {canManage && <th />}
+              {canManage && <th aria-label="Actions" />}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((it) => {
-              const live = labelFor(it.flagType, it.ref);
-              return (
-                <tr key={it.id} className={it.active ? undefined : styles.rowMuted}>
-                  <td>{FLAG_LABEL[it.flagType]}</td>
-                  <td>
-                    {live ?? it.label ?? <span className={styles.code}>{it.ref}</span>}
-                    {!live && !pickersLoading && (
-                      <> <span className={styles.chip}>not in catalogue</span></>
-                    )}
-                  </td>
-                  <td className={styles.num}>{fmtSen(it.bonusCenti)}</td>
-                  <td>
-                    {canManage ? (
-                      <label className={styles.toggleCell}>
-                        <input
-                          type="checkbox"
-                          checked={it.countsAsRevenue}
-                          disabled={update.isPending}
-                          onChange={(e) => void update.mutateAsync({
-                            id: it.id, countsAsRevenue: e.target.checked,
-                          })}
-                        />
-                        <span>{it.countsAsRevenue ? 'Earns both' : 'Instead of %'}</span>
-                      </label>
-                    ) : (
-                      <span className={`${styles.chip} ${it.countsAsRevenue ? styles.chipHit : styles.chipOff}`}>
-                        {it.countsAsRevenue ? 'Earns both' : 'Instead of %'}
-                      </span>
-                    )}
-                  </td>
-                  <td>
-                    <span className={`${styles.chip} ${it.active ? styles.chipHit : styles.chipOff}`}>
-                      {it.active ? 'Active' : 'Off'}
-                    </span>
-                  </td>
-                  {canManage && (
-                    <td className={styles.num}>
-                      <div className={styles.actions}>
-                        <button
-                          type="button" className={styles.btn}
-                          disabled={update.isPending}
-                          onClick={() => void update.mutateAsync({ id: it.id, active: !it.active })}
-                        >
-                          {it.active ? 'Turn off' : 'Turn on'}
-                        </button>
-                        <button
-                          type="button" className={styles.iconBtn}
-                          aria-label={`Delete ${it.label || it.ref}`}
-                          disabled={remove.isPending}
-                          onClick={() => {
-                            /* Deleting stops it paying in every OPEN period too.
-                               Closed periods keep their frozen figures. */
-                            if (window.confirm(
-                              `Delete the KPI item for "${it.label || it.ref}"?\n\nOpen periods will stop paying it. Turning it off instead keeps the record.`,
-                            )) void remove.mutateAsync(it.id);
-                          }}
-                        >
-                          <Trash2 size={16} strokeWidth={1.75} />
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-            {rows.length === 0 && (
-              <tr className={styles.rowMuted}>
-                <td colSpan={canManage ? 6 : 5}>— No KPI items. Only the percentage scheme pays.</td>
+          {groups.map((g) => (
+            <tbody key={g.type}>
+              <tr className={styles.groupRow}>
+                <th colSpan={cols} scope="colgroup">
+                  {TYPE_LABEL[g.type]}<span className={styles.groupCount}>{g.rules.length}</span>
+                </th>
               </tr>
-            )}
-          </tbody>
+              {g.rules.map((r) => (
+                <RuleRow
+                  key={r.id}
+                  rule={r}
+                  view={views.get(r.id)!}
+                  canManage={canManage}
+                  onEdit={() => setEditing(r)}
+                />
+              ))}
+            </tbody>
+          ))}
+          {groups.length === 0 && (
+            <tbody>
+              <tr>
+                <td colSpan={cols} className={styles.empty}>
+                  No KPI items yet — only the percentage scheme pays.
+                  {canManage && ' Add one with New KPI item.'}
+                </td>
+              </tr>
+            </tbody>
+          )}
         </table>
       </div>
 
-      {canManage && (
-        <>
-          {addError && <p className={styles.error}>{addError}</p>}
-          <div className={styles.fieldGrid}>
-            <label className={styles.field}>
-              <span className={styles.label}>Type</span>
-              <select
-                value={flagType}
-                onChange={(e) => { setFlagType(e.target.value as HrFlagType); setRef(''); }}
-              >
-                {FLAG_ORDER.map((f) => (
-                  <option key={f} value={f}>{FLAG_LABEL[f]}</option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>Applies to</span>
-              <select value={ref} onChange={(e) => setRef(e.target.value)} disabled={pickersLoading}>
-                <option value="">{pickersLoading ? 'Loading…' : '— select —'}</option>
-                {options.map((o) => (
-                  <option key={o.ref} value={o.ref}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>Amount earned each</span>
-              <span className={styles.suffixField}>
-                <span className={styles.suffix}>RM</span>
-                <input
-                  type="number" min={0} step={10} inputMode="decimal"
-                  value={bonusRm} onChange={(e) => setBonusRm(e.target.value)}
-                />
-              </span>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>Also counts as product revenue</span>
-              <label className={styles.toggleCell}>
-                <input
-                  type="checkbox"
-                  checked={countsAsRevenue}
-                  onChange={(e) => setCountsAsRevenue(e.target.checked)}
-                />
-                <span>{countsAsRevenue ? 'Earns both' : 'Instead of %'}</span>
-              </label>
-            </label>
-            <div className={styles.field}>
-              <span className={styles.label}>&nbsp;</span>
-              <div className={styles.actions}>
-                <button
-                  type="button" className={styles.btn}
-                  disabled={create.isPending} onClick={() => void add()}
-                >
-                  <Plus size={16} strokeWidth={1.75} /> Add KPI item
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      <p className={styles.notice}>
-        <span className={styles.noticeTitle}>What &ldquo;also counts as product revenue&rdquo; does</span>
-        <br />
-        <strong>Off</strong> — the default, and how every rule behaved before this option existed.
-        The fixed amount is earned <em>instead of</em> the percentage on the portion it covers, and
-        that portion leaves product sales. A RM 3,000 sofa with a RM 125 fabric upgrade flagged at
-        RM 50: product sales keeps RM 3,000, the salesperson earns the RM 50, the RM 125 drops out.
-        <br />
-        <strong>On</strong> — earns <em>both</em>. Same RM 50, and the RM 125 stays in product sales,
-        so it also earns the percentage.
-      </p>
-
       {bothCount > 0 && (
-        <p className={styles.notice}>
-          <span className={styles.noticeTitle}>
+        <p className={opex.notice}>
+          <span className={opex.noticeTitle}>
             <AlertTriangle size={14} strokeWidth={1.75} /> {bothCount} rule
-            {bothCount === 1 ? '' : 's'} currently earns both
+            {bothCount === 1 ? '' : 's'} currently earn{bothCount === 1 ? 's' : ''} both
           </span>
           <br />
           The amount those keep in product sales also counts toward the RM 100k personal target and
@@ -314,12 +194,127 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
         </p>
       )}
 
-      <p className={styles.notice}>
-        <span className={styles.noticeTitle}>Where two rules cover the same item</span><br />
-        A <strong>product</strong> rule beats a <strong>category</strong> rule — naming one SKU is
-        treated as a deliberate override of the blanket rate, so one purchase never collects both.
-        Fabric and special add-on rules target a different part of the same purchase and do stack.
-      </p>
+      <details className={styles.explain}>
+        <summary>
+          <ChevronRight size={16} strokeWidth={1.75} className={styles.explainChevron} />
+          How KPI items pay
+        </summary>
+        <dl className={styles.explainBody}>
+          <div>
+            <dt>Instead of % — the default</dt>
+            <dd>
+              The fixed amount replaces the percentage on what it covers, and that part leaves
+              product sales. A RM 3,000 sofa with a RM 125 fabric upgrade flagged at RM 50: product
+              sales keeps RM 3,000, the salesperson earns the RM 50, the RM 125 drops out.
+            </dd>
+          </div>
+          <div>
+            <dt>Earns both</dt>
+            <dd>
+              Same RM 50, and the RM 125 stays in product sales — so it also earns the percentage
+              and counts toward the personal and showroom targets.
+            </dd>
+          </div>
+          <div>
+            <dt>Quantity tiers</dt>
+            <dd>
+              Units are counted per salesperson over the period chosen on the Commission tab, from
+              the rule&rsquo;s start date. Once the count passes a tier, every unit pays that
+              tier&rsquo;s amount: RM 40, more than 5 → RM 50, more than 10 → RM 60 — selling 12
+              pays 12 × RM 60.
+            </dd>
+          </div>
+          <div>
+            <dt>Two rules on one item</dt>
+            <dd>
+              A product rule beats a category rule — naming one SKU is a deliberate override of the
+              blanket rate, so one purchase never collects both. Fabric series and special add-on
+              rules target a different part of the same purchase and do stack.
+            </dd>
+          </div>
+        </dl>
+      </details>
+
+      {editing && (
+        <KpiRuleDrawer
+          rule={editing === 'new' ? null : editing}
+          view={editing === 'new' ? undefined : views.get(editing.id)}
+          rules={rules}
+          targets={targets}
+          nameOf={nameOf}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
+  );
+};
+
+const RuleRow = ({
+  rule, view, canManage, onEdit,
+}: {
+  rule: CommissionKpiItem;
+  view: KpiRuleView;
+  canManage: boolean;
+  onEdit: () => void;
+}) => {
+  const tiers = sortedQtyTiers(rule.qtyTiers);
+  return (
+    <tr className={rule.active ? undefined : styles.rowOff}>
+      <td>
+        <div className={styles.target}>
+          <span className={styles.targetName}>{view.name}</span>
+          {view.detail && <span className={styles.targetDetail}>{view.detail}</span>}
+          {view.state !== 'ok' && (
+            <span className={styles.targetFlags}>
+              <span
+                className={styles.chipWarn}
+                title={view.state === 'missing'
+                  ? 'Orders cannot carry these codes any more, so this rule may be paying nothing. Add it again on the current series, then delete this one.'
+                  : `No longer offered: ${view.missing.join(', ')}`}
+              >
+                <AlertTriangle size={12} strokeWidth={1.75} />
+                {view.state === 'missing' ? MISSING_WHERE[rule.flagType] : `${view.missing.length} code${view.missing.length === 1 ? '' : 's'} gone`}
+              </span>
+            </span>
+          )}
+        </div>
+      </td>
+      <td>
+        <div className={styles.ladder}>
+          <span className={styles.ladderBase}>{fmtSen(rule.bonusCenti)} each</span>
+          {tiers.map((t) => (
+            <span key={t.aboveQty} className={styles.ladderStep}>
+              more than {t.aboveQty} sold → <strong>{fmtSen(t.bonusCenti)}</strong>
+            </span>
+          ))}
+        </div>
+      </td>
+      <td className={rule.effectiveFrom ? undefined : opex.muted}>
+        {rule.effectiveFrom ? fmtDate(rule.effectiveFrom) : 'Every order'}
+      </td>
+      <td>
+        {rule.countsAsRevenue
+          ? <span className={`${opex.chip} ${opex.chipHit}`}>Earns both</span>
+          : <span className={opex.muted}>Instead of %</span>}
+      </td>
+      <td>
+        <span className={styles.status}>
+          <span className={`${styles.dot} ${rule.active ? styles.dotOn : styles.dotOff}`} />
+          {rule.active ? 'Active' : 'Off'}
+        </span>
+      </td>
+      {canManage && (
+        <td className={opex.num}>
+          <button
+            type="button"
+            className={opex.btn}
+            aria-label={`Edit ${view.name}`}
+            onClick={onEdit}
+          >
+            <Pencil size={16} strokeWidth={1.75} /> Edit
+          </button>
+        </td>
+      )}
+    </tr>
   );
 };

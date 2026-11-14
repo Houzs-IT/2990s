@@ -592,6 +592,31 @@ roadshow, "difficult to manage" — pick a showroom, or a roadshow and which eve
 
 ---
 
+## OPEX › Commission KPI items — tiers, series, and the fabric-code rename trap (2026-11-15)
+
+Commission is computed in the POS (`lib/commission-engine.ts`) from rules in
+**2990's** `public.hr_item_kpi` (`apps/api/src/routes/commission.ts`) and orders
+read from Houzs. The arithmetic is `@2990s/shared/hr-commission`, engine **v4**.
+
+- **Quantity tiers** (`qty_tiers`, migration `0227`, owner 2026-11-15): RM 40 a
+  unit, more than 5 → RM 50, more than 10 → RM 60. **All-units** (ruled that day):
+  12 sold pays 12 × RM 60. Counted per salesperson, per rule, over the period on
+  the Commission tab, after precedence and the rule's `effective_from` — so the
+  bonus is settled once per period (`settleKpiTallies`), never per unit. A step
+  must pay more than the one below (`qtyTiersError`, the API refuses otherwise).
+- **A fabric rule matches `variants.fabricId`** — a `fabric_library` id, not a
+  colour and not a series name. A named series (EMBRACE, MONZA …) can span several
+  ids, so a rule carries them all in `refs` (`0227`; `[]` = just `ref`). The screen
+  names rules by the Fabric Converter's series (`lib/kpi-rule-targets.ts`).
+- 🔑 **A Houzs fabric code rename kills 2990's fabric rules silently.** Houzs's
+  `rename-fabric-codes.mjs` rewrites their own `scm.hr_item_kpi` AND every order
+  line's `variants.fabricId` — not this database. On 2026-11-13 EMBRACE went from
+  KN01–KN13 to EM-01–EM-13 (one id, `EM`); the eleven KN rules here then matched
+  nothing, October included, until they were replaced by one EMBRACE rule on
+  2026-11-15. Since then Setup flags such a rule "Not in the fabric library" and the
+  Commission report warns when one paid nothing. After any Houzs code rename, check
+  this table.
+
 ## Modular › "Show in POS" — the SKUs' shelf flag, not the Model (2026-10-24)
 
 Owner 2026-10-24: a new SKU must not reach the tablet until someone switches it on in

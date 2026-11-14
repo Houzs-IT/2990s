@@ -30,7 +30,9 @@
 // named, tested function for that reason and must not be inlined.
 // ----------------------------------------------------------------------------
 
-import type { KpiUnit } from '@2990s/shared/hr-commission';
+import {
+  firingFlags, kpiFlagKey, kpiTierAt, type ItemKpiFlag, type KpiUnit,
+} from '@2990s/shared/hr-commission';
 
 /** Whole ringgit → integer centi. The ONE place the fabric-tier add-on crosses
  *  from the sell-time vocabulary into the payroll one. */
@@ -170,4 +172,97 @@ export const buildKpiUnits = (
   }
 
   return { units, unresolvedFabric };
+};
+
+/* ── the period pass: count, then settle (v4 — owner 2026-11-15) ──────────────
+   A quantity tier depends on EVERY unit one salesperson sold under one rule in
+   the period, so a bonus can no longer be summed unit by unit. The units are
+   counted first — per salesperson, per rule, per order — and each rule is then
+   settled once, on its count: every unit at the amount the count reached
+   (all-units, the owner's ruling). With no tiers this is exactly the old
+   per-unit sum, qty × amount. */
+
+/** One rule's KPI line for one salesperson: what it paid and which orders it
+ *  came from. Owner 2026-08-31: "我要它的 dropdown 这一边可以看到 Sales Order
+ *  Number，这样我知道它是哪一个 Sales Order" — "12 × RM 50" is not checkable
+ *  until you can see WHICH twelve. */
+export interface CommissionKpiDetail {
+  label: string;
+  qty: number;
+  /** Per-unit amount actually paid: the rule's base, or the quantity tier its
+   *  `qty` reached — which then pays every one of those units. */
+  bonusCenti: number;
+  lineCenti: number;
+  /** Set when a quantity tier lifted the amount: the step reached, and the
+   *  base it replaced. Absent / null on a rule paying its base. */
+  tier?: { aboveQty: number; baseBonusCenti: number } | null;
+  /** The orders that earned it, newest doc_no first. */
+  orders: Array<{ docNo: string; qty: number; lineCenti: number }>;
+}
+
+/** One rule's units for one salesperson across the period — the count its
+ *  quantity tiers are judged on. */
+export interface KpiRuleTally {
+  flag: ItemKpiFlag;
+  qty: number;
+  /** doc_no → the units that order contributed. */
+  orders: Map<string, number>;
+}
+
+/** staff id → rule key (kpiFlagKey) → tally. */
+export type KpiTallies = Map<string, Map<string, KpiRuleTally>>;
+
+/** Count one order's units into the tallies: every unit under every rule that
+ *  FIRES on it — after precedence, so a category rule a product rule beat
+ *  counts nothing, exactly as it pays nothing. */
+export const tallyKpiUnits = (
+  tallies: KpiTallies,
+  staffId: string,
+  docNo: string,
+  units: readonly KpiUnit[],
+  flags: ItemKpiFlag[],
+): void => {
+  for (const u of units) {
+    if (!(u.qty > 0)) continue;
+    for (const f of firingFlags(u, flags)) {
+      const byRule = tallies.get(staffId) ?? new Map<string, KpiRuleTally>();
+      const key = kpiFlagKey(f);
+      const t = byRule.get(key) ?? { flag: f, qty: 0, orders: new Map<string, number>() };
+      t.qty += u.qty;
+      t.orders.set(docNo, (t.orders.get(docNo) ?? 0) + u.qty);
+      byRule.set(key, t);
+      tallies.set(staffId, byRule);
+    }
+  }
+};
+
+/** Settle one salesperson's tallies: each rule pays its count × the amount the
+ *  count reached. The detail sums back to `bonusCenti` by construction. */
+export const settleKpiTallies = (
+  byRule: ReadonlyMap<string, KpiRuleTally> | undefined,
+  labelOf: (f: ItemKpiFlag) => string,
+): { bonusCenti: number; detail: CommissionKpiDetail[] } => {
+  let bonusCenti = 0;
+  const detail: CommissionKpiDetail[] = [];
+  for (const t of byRule?.values() ?? []) {
+    const { bonusCenti: each, tier } = kpiTierAt(t.flag, t.qty);
+    const lineCenti = t.qty * each;
+    if (lineCenti <= 0) continue;
+    bonusCenti += lineCenti;
+    detail.push({
+      label: labelOf(t.flag),
+      qty: t.qty,
+      bonusCenti: each,
+      lineCenti,
+      tier: tier ? { aboveQty: tier.aboveQty, baseBonusCenti: t.flag.bonusCenti } : null,
+      /* Newest first — doc numbers are date-ordered by construction
+         (2990-SO-YYMM-NNN), so a plain reverse sort is chronological. Each
+         order is priced at the SAME reached amount: under all-units the tier
+         belongs to the period, not to the order that crossed it. */
+      orders: [...t.orders.entries()]
+        .map(([docNo, qty]) => ({ docNo, qty, lineCenti: qty * each }))
+        .sort((a, b) => b.docNo.localeCompare(a.docNo)),
+    });
+  }
+  return { bonusCenti, detail };
 };

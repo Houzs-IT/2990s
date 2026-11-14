@@ -168,6 +168,22 @@ When porting this to React + Vite + RR7:
 
 ## Approved deviations from prototype
 
+### OPEX › Setup › KPI items · series names, quantity tiers, an editor drawer · 15 November 2026
+
+Owner requested three things on one card: the fabric picker must show fabric
+series names, not library codes ("MONS / EM / MONZA-HL-B01" read as gibberish);
+a KPI amount that steps up with quantity (RM 40 a unit, more than 5 sold → RM 50,
+more than 10 → RM 60 — every unit pays the step reached, ruled the same day); and
+a tidier screen. Rules and the picker are named by the saved Fabric Converter
+series (the same grouping Fabric tiers uses, so series sharing one pricing record
+show as one, "HOMELY / BROWNIE"), and a rule whose codes no longer exist carries a
+"Not in the fabric library" chip. The table is one quiet row per rule, grouped by
+type, showing the base amount with its tiers beneath, the start date, the revenue
+option and an Active/Off dot; the inline add form, toggles and delete moved into a
+right-hand drawer (search list, amount, tiers with worked examples, start date,
+revenue option). The two long explanations fold into "How KPI items pay". Tokens,
+card, table band and Lucide icons are the existing OPEX ones.
+
 ### My orders · showroom or roadshow event · 30 October 2026
 
 Owner requested a way to separate My orders by showroom or roadshow event,

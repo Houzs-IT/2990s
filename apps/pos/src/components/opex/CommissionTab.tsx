@@ -542,6 +542,15 @@ const PersonRows = ({
                     <div className={styles.detailItem}>
                       <strong>{d.label}</strong>
                       <span>{d.qty} × {fmtSen(d.bonusCenti)}</span>
+                      {/* A quantity tier lifted the amount for EVERY unit
+                          (owner 2026-11-15) — say which step, and what the
+                          base would have been, or "12 × RM 60" cannot be
+                          checked against a rule that says RM 40. */}
+                      {d.tier && (
+                        <span>
+                          more than {d.tier.aboveQty} sold · base {fmtSen(d.tier.baseBonusCenti)}
+                        </span>
+                      )}
                       <span className={styles.detailAmount}>{fmtSen(d.lineCenti)}</span>
                     </div>
                     {/* WHICH orders earned it. A line reading "12 × RM 50" is

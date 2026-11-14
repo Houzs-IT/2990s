@@ -35,7 +35,9 @@
 import { Hono, type Context } from 'hono';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { COMMISSION_ENGINE_VERSION } from '@2990s/shared/hr-commission';
+import {
+  COMMISSION_ENGINE_VERSION, MAX_KPI_QTY_TIERS, qtyTiersError, sortedQtyTiers, type KpiQtyTier,
+} from '@2990s/shared/hr-commission';
 import {
   HR_MANAGE, HR_READ, bearerOf, callerHas, resolveHouzsCaller, type HouzsCaller,
 } from '../lib/houzs-identity';
@@ -51,6 +53,10 @@ const admin = (c: Ctx): SupabaseClient =>
   });
 
 const issues = (e: z.ZodError) => e.issues.map((i) => ({ path: i.path, message: i.message }));
+
+/* Up here, not beside the payout routes that also use it: the item-KPI schemas
+   below are built at module load and read it then. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Resolve + authorise in one step. Every handler starts with this. */
 async function gate(
@@ -275,14 +281,29 @@ commission.delete('/profiles/:id', async (c) => {
 
 /* ── item KPI rules ───────────────────────────────────────────────────────── */
 
-const ITEM_KPI_SELECT = 'id, flag_type, ref, label, bonus_centi, counts_as_revenue, effective_from, active';
+const ITEM_KPI_SELECT =
+  'id, flag_type, ref, refs, label, bonus_centi, qty_tiers, counts_as_revenue, effective_from, active';
+
+/** Stored tiers back out, whitelisted field by field. sortedQtyTiers drops a
+ *  malformed step, so a row edited by hand cannot reach the engine broken. */
+const tiersToWire = (raw: unknown): KpiQtyTier[] =>
+  sortedQtyTiers(Array.isArray(raw)
+    ? raw.map((t) => ({
+        aboveQty: Number((t as Record<string, unknown>)?.aboveQty),
+        bonusCenti: Number((t as Record<string, unknown>)?.bonusCenti),
+      }))
+    : []);
 
 const itemKpiToWire = (r: Record<string, unknown>) => ({
   id: String(r.id),
   flagType: String(r.flag_type),
   ref: String(r.ref),
+  /* 0227 — everything the rule pays on; [] = just `ref`. */
+  refs: Array.isArray(r.refs) ? (r.refs as unknown[]).map(String).filter(Boolean) : [],
   label: String(r.label ?? ''),
   bonusCenti: Number(r.bonus_centi ?? 0),
+  /* 0227 — quantity steps above bonusCenti; [] = flat. */
+  qtyTiers: tiersToWire(r.qty_tiers),
   /* THE 2026-08-31 OPTION. False = the original rule (earn the fixed amount
      INSTEAD of the percentage on the flagged portion). True = earn both. */
   countsAsRevenue: Boolean(r.counts_as_revenue),
@@ -302,14 +323,33 @@ commission.get('/item-kpi', async (c) => {
 
 const FLAG_TYPES = ['product', 'category', 'fabric', 'special'] as const;
 
+/* The shape of one step. Whether a LADDER is sound — ascending, each step
+   paying more than the one below — is qtyTiersError's call, the same function
+   the Setup form explains with, so the two can never disagree about a rule. */
+const qtyTiersSchema = z.array(z.object({
+  aboveQty: z.number().int().min(1).max(100_000),
+  bonusCenti: z.number().int().positive(),
+})).max(MAX_KPI_QTY_TIERS);
+
+/* Start date — YYYY-MM-DD, or null for "every order ever". */
+const effectiveFromSchema = z.string().regex(ISO_DATE).nullable();
+
 const itemKpiCreateSchema = z.object({
   flagType: z.enum(FLAG_TYPES),
   ref: z.string().min(1),
+  /* A named series over several library ids. Trimmed and de-duplicated below;
+     [] = just `ref`. */
+  refs: z.array(z.string().trim().min(1)).max(100).default([]),
   label: z.string().default(''),
   bonusCenti: z.number().int().nonnegative(),
+  qtyTiers: qtyTiersSchema.default([]),
   countsAsRevenue: z.boolean().default(false),
+  effectiveFrom: effectiveFromSchema.default(null),
   active: z.boolean().default(true),
 });
+
+const tiersRefusal = (c: Ctx, reason: string) =>
+  c.json({ error: 'invalid_tiers', reason }, 400);
 
 commission.post('/item-kpi', async (c) => {
   const g = await gate(c, HR_MANAGE);
@@ -319,11 +359,14 @@ commission.post('/item-kpi', async (c) => {
   const parsed = itemKpiCreateSchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const d = parsed.data;
+  const tiersWrong = qtyTiersError(d.bonusCenti, d.qtyTiers);
+  if (tiersWrong) return tiersRefusal(c, tiersWrong);
   const { data, error } = await admin(c)
     .from('hr_item_kpi')
     .insert({
-      flag_type: d.flagType, ref: d.ref, label: d.label,
-      bonus_centi: d.bonusCenti, counts_as_revenue: d.countsAsRevenue, active: d.active,
+      flag_type: d.flagType, ref: d.ref, refs: [...new Set(d.refs)], label: d.label,
+      bonus_centi: d.bonusCenti, qty_tiers: sortedQtyTiers(d.qtyTiers),
+      counts_as_revenue: d.countsAsRevenue, effective_from: d.effectiveFrom, active: d.active,
     })
     .select(ITEM_KPI_SELECT).single();
   if (error) return c.json({ error: 'create_failed', reason: error.message }, 500);
@@ -333,13 +376,17 @@ commission.post('/item-kpi', async (c) => {
 const itemKpiPatchSchema = z.object({
   label: z.string().optional(),
   bonusCenti: z.number().int().nonnegative().optional(),
+  qtyTiers: qtyTiersSchema.optional(),
   countsAsRevenue: z.boolean().optional(),
+  effectiveFrom: effectiveFromSchema.optional(),
   active: z.boolean().optional(),
 });
 
-/* `flagType` and `ref` are deliberately not patchable: repointing a rule in
-   place silently re-aims an existing bonus at a different product. Delete and
-   re-add, so the change is visible as one. */
+/* `flagType`, `ref` and `refs` are deliberately not patchable: repointing a
+   rule in place silently re-aims an existing bonus at a different product.
+   Delete and re-add, so the change is visible as one. The amounts, the tiers
+   and the start date ARE editable — like a rate, they move every open
+   period's figures, which the Setup screen says. */
 commission.patch('/item-kpi/:id', async (c) => {
   const g = await gate(c, HR_MANAGE);
   if (!g.ok) return g.res;
@@ -348,12 +395,32 @@ commission.patch('/item-kpi/:id', async (c) => {
   const parsed = itemKpiPatchSchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const d = parsed.data;
+  const sb = admin(c);
+
+  /* A ladder is judged against the base it sits on, so changing EITHER half
+     re-checks the pair — a base raised above its first step would otherwise
+     leave a rule where selling more pays less. */
+  if (d.bonusCenti !== undefined || d.qtyTiers !== undefined) {
+    const { data: cur, error: curErr } = await sb
+      .from('hr_item_kpi').select('bonus_centi, qty_tiers').eq('id', c.req.param('id')).maybeSingle();
+    if (curErr) return c.json({ error: 'fetch_failed', reason: curErr.message }, 500);
+    if (!cur) return c.json({ error: 'not_found' }, 404);
+    const row = cur as unknown as Record<string, unknown>;
+    const tiersWrong = qtyTiersError(
+      d.bonusCenti ?? Number(row.bonus_centi ?? 0),
+      d.qtyTiers ?? tiersToWire(row.qty_tiers),
+    );
+    if (tiersWrong) return tiersRefusal(c, tiersWrong);
+  }
+
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (d.label !== undefined) patch.label = d.label;
   if (d.bonusCenti !== undefined) patch.bonus_centi = d.bonusCenti;
+  if (d.qtyTiers !== undefined) patch.qty_tiers = sortedQtyTiers(d.qtyTiers);
   if (d.countsAsRevenue !== undefined) patch.counts_as_revenue = d.countsAsRevenue;
+  if (d.effectiveFrom !== undefined) patch.effective_from = d.effectiveFrom;
   if (d.active !== undefined) patch.active = d.active;
-  const { data, error } = await admin(c)
+  const { data, error } = await sb
     .from('hr_item_kpi').update(patch).eq('id', c.req.param('id'))
     .select(ITEM_KPI_SELECT).maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
@@ -485,8 +552,6 @@ const periodToWire = (r: Record<string, unknown>) => ({
   reopenedAt: r.reopened_at ? String(r.reopened_at) : null,
   reopenReason: r.reopen_reason ? String(r.reopen_reason) : null,
 });
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 commission.get('/payout/periods', async (c) => {
   const g = await gate(c, HR_READ);
