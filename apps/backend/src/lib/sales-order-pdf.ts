@@ -150,7 +150,7 @@ const receiptTerms = (noun: string): readonly string[] => [
   'Delivery date is best-effort and may shift ±3 working days subject to operation confirmation.',
   `Stair-carry surcharges (if any) are billed on this ${noun} and are not invoiced separately on the DO.`,
   'Once the delivery date has been confirmed, any subsequent request to change or extend the date will incur a rescheduling surcharge.',
-  'All deposits paid are not refundable.',
+  `Once a deposit has been paid, this ${noun} cannot be cancelled and the deposit is not refundable.`,
 ];
 
 /* The variant keys that can carry an internal fabric code, mirrored from

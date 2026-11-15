@@ -131,8 +131,8 @@ export async function buildSalesOrderPdf(
   writeText(`SSM ${COMPANY_LEGAL.ssm}`, MARGIN, headerTop + 4.5);
   doc.setTextColor(...INK);
   let leftY = drawLines([...COMPANY_LEGAL.hqLines], MARGIN, headerTop + 9.5, halfWidth + 20, 3.6);
-  if (COMPANY_LEGAL.whatsapp) {
-    leftY = drawLines([`WhatsApp: ${COMPANY_LEGAL.whatsapp}`], MARGIN, leftY + 1, halfWidth, 3.6);
+  if (COMPANY_LEGAL.customerServicePhone) {
+    leftY = drawLines([`Customer service: ${COMPANY_LEGAL.customerServicePhone}`], MARGIN, leftY + 1, halfWidth, 3.6);
   }
 
   doc.setFont('helvetica', 'bold');

@@ -148,9 +148,15 @@
   font-size: var(--fs-11);
 }
 
+/* The tag column is sized in em, not px, so it scales with the tag text.
+   --fs-11 is not defined in the POS, so the tags render at the inherited 16px,
+   where a 64px column let SHOWROOM and the contact tag run over the text
+   beside them — over the first digits of the phone number. 7em holds the
+   widest single word (SHOWROOM, ~6.7em); the "Customer service" tag (owner
+   2026-11-15) wraps onto two lines. */
 .legalAddrBlock {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 7em 1fr;
   gap: var(--space-2);
 }
 

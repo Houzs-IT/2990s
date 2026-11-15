@@ -236,11 +236,11 @@ async function renderPurchaseOrderInto(
     y += 4;
   }
   /* Contact number (Loo 2026-09-01) — the PO draws its own centered
-     letterhead instead of pdf-common's drawHeader, so the WhatsApp line is
-     repeated here to keep one consistent letterhead across all documents.
-     Skipped while COMPANY.whatsapp is unset. */
-  if (COMPANY.whatsapp) {
-    doc.text(`WhatsApp: ${COMPANY.whatsapp}`, pageW / 2, y, { align: 'center' });
+     letterhead instead of pdf-common's drawHeader, so the customer service
+     line is repeated here to keep one consistent letterhead across all
+     documents. Skipped while COMPANY.customerServicePhone is unset. */
+  if (COMPANY.customerServicePhone) {
+    doc.text(`Customer service: ${COMPANY.customerServicePhone}`, pageW / 2, y, { align: 'center' });
     y += 4;
   }
   y += 2;
