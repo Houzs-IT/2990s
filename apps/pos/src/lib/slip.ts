@@ -1,4 +1,5 @@
 import { API_URL, authedFetchRaw, IS_HOUZS } from './apiClient';
+import { handleSessionExpired } from './session-recovery';
 import type {
   SlipInitRequest,
   SlipInitResponse,
@@ -13,6 +14,15 @@ export async function sha256Hex(file: File | Blob): Promise<string> {
     .join('');
 }
 
+/** Throw for a refused slip call. A 401 means the login behind it is gone: an
+ *  upload is not a TanStack call, so main.tsx's shared handler never sees it,
+ *  and the redirect to sign in has to happen here. */
+async function refused(res: Response, step: string): Promise<never> {
+  if (res.status === 401) void handleSessionExpired();
+  const text = await res.text().catch(() => '<no body>');
+  throw new Error(`slip ${step} failed (${res.status}): ${text}`);
+}
+
 async function initSlipUpload(file: File): Promise<SlipInitResponse> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   const hash = await sha256Hex(file);
@@ -25,10 +35,7 @@ async function initSlipUpload(file: File): Promise<SlipInitResponse> {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip init failed (${res.status}): ${text}`);
-  }
+  if (!res.ok) await refused(res, 'init');
   return res.json() as Promise<SlipInitResponse>;
 }
 
@@ -54,10 +61,7 @@ async function uploadBytesProxy(sessionId: string, file: File): Promise<void> {
     headers: { 'content-type': file.type },
     body: file,
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip upload failed (${res.status}): ${text}`);
-  }
+  if (!res.ok) await refused(res, 'upload');
 }
 
 async function confirmUpload(sessionId: string): Promise<SlipConfirmResponse> {
@@ -65,10 +69,7 @@ async function confirmUpload(sessionId: string): Promise<SlipConfirmResponse> {
   const res = await authedFetchRaw(`/slips/${sessionId}/confirm`, {
     method: 'POST',
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip confirm failed (${res.status}): ${text}`);
-  }
+  if (!res.ok) await refused(res, 'confirm');
   return res.json() as Promise<SlipConfirmResponse>;
 }
 
