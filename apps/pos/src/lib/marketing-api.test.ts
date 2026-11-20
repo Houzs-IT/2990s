@@ -42,3 +42,33 @@ describe('requestBody — where a request goes', () => {
     expect(body).not.toHaveProperty('destinations');
   });
 });
+
+/* Hub 2990-0066: a Houzs session that had lapsed showed "Could not load
+   Marketing: Houzs did not recognise this session" instead of the sign-in
+   screen, because the error lost its 401. */
+describe('call — a session Houzs no longer recognises', () => {
+  const answer = (status: number, reason: string) => async () => {
+    vi.stubEnv('VITE_API_URL', 'https://api.test');
+    vi.resetModules();
+    vi.doMock('./apiClient', () => ({ bearerToken: async () => 'tok' }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'x', reason }), { status })));
+    const { call } = await import('./marketing-api');
+    const { isSessionExpiredError } = await import('./session-recovery');
+    const err = (await call('/state').catch((e: unknown) => e)) as Error;
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    return { err, expired: isSessionExpiredError(err) };
+  };
+
+  it('sends the caller back to sign in on a 401', async () => {
+    const { err, expired } = await answer(401, 'Houzs did not recognise this session')();
+    expect(expired).toBe(true);
+    expect(err.message).toContain('Houzs did not recognise this session');
+  });
+
+  it('keeps any other refusal as the plain reason', async () => {
+    const { err, expired } = await answer(403, 'not allowed')();
+    expect(expired).toBe(false);
+    expect(err.message).toBe('not allowed');
+  });
+});
