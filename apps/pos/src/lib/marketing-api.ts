@@ -23,7 +23,13 @@ import type {
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
-export async function call<T>(path: string, init?: RequestInit): Promise<T> {
+/** The message a refused call throws. A 401 keeps its "401 " lead so main.tsx's
+ *  isSessionExpiredError sends the caller back to sign in, instead of leaving a
+ *  dead session on screen (Hub 2990-0066). */
+export const refusalMessage = (status: number, statusText: string, reason: string): string =>
+  status === 401 ? `401 ${reason || statusText}` : reason || `${status} ${statusText}`;
+
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   const token = await bearerToken();
   if (!token) throw new Error('not_authenticated');
@@ -43,10 +49,7 @@ export async function call<T>(path: string, init?: RequestInit): Promise<T> {
       const j = JSON.parse(text) as { reason?: string; error?: string };
       reason = j.reason ?? j.error ?? text;
     } catch { /* not JSON */ }
-    // A 401 keeps its "401 " lead so main.tsx's isSessionExpiredError sends the
-    // caller back to sign in, instead of leaving a dead session on screen.
-    if (res.status === 401) throw new Error(`401 ${reason || res.statusText}`);
-    throw new Error(reason || `${res.status} ${res.statusText}`);
+    throw new Error(refusalMessage(res.status, res.statusText, reason));
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./supabase', () => ({ supabase: {} }));
 
-import { requestBody } from './marketing-api';
+import { refusalMessage, requestBody } from './marketing-api';
+import { isSessionExpiredError } from './session-recovery';
 import { blankRequest, type LaunchRequest } from '../components/marketing/marketing-model';
 
 /* owner 2026-11-12: how a launch request names where it goes on the wire. */
@@ -46,29 +47,20 @@ describe('requestBody — where a request goes', () => {
 /* Hub 2990-0066: a Houzs session that had lapsed showed "Could not load
    Marketing: Houzs did not recognise this session" instead of the sign-in
    screen, because the error lost its 401. */
-describe('call — a session Houzs no longer recognises', () => {
-  const answer = (status: number, reason: string) => async () => {
-    vi.stubEnv('VITE_API_URL', 'https://api.test');
-    vi.resetModules();
-    vi.doMock('./apiClient', () => ({ bearerToken: async () => 'tok' }));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'x', reason }), { status })));
-    const { call } = await import('./marketing-api');
-    const { isSessionExpiredError } = await import('./session-recovery');
-    const err = (await call('/state').catch((e: unknown) => e)) as Error;
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    return { err, expired: isSessionExpiredError(err) };
-  };
-
-  it('sends the caller back to sign in on a 401', async () => {
-    const { err, expired } = await answer(401, 'Houzs did not recognise this session')();
-    expect(expired).toBe(true);
-    expect(err.message).toContain('Houzs did not recognise this session');
+describe('refusalMessage — a session Houzs no longer recognises', () => {
+  it('sends the caller back to sign in on a 401', () => {
+    const msg = refusalMessage(401, 'Unauthorized', 'Houzs did not recognise this session');
+    expect(isSessionExpiredError(new Error(msg))).toBe(true);
+    expect(msg).toContain('Houzs did not recognise this session');
   });
 
-  it('keeps any other refusal as the plain reason', async () => {
-    const { err, expired } = await answer(403, 'not allowed')();
-    expect(expired).toBe(false);
-    expect(err.message).toBe('not allowed');
+  it('still reads as a 401 when the body was empty', () => {
+    expect(isSessionExpiredError(new Error(refusalMessage(401, 'Unauthorized', '')))).toBe(true);
+  });
+
+  it('keeps any other refusal as the plain reason', () => {
+    const msg = refusalMessage(403, 'Forbidden', 'not allowed');
+    expect(msg).toBe('not allowed');
+    expect(isSessionExpiredError(new Error(msg))).toBe(false);
   });
 });
