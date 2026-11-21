@@ -20,7 +20,9 @@ const STAFF: SalesStaffRow[] = [
 const staffResult: { data?: SalesStaffRow[]; error: unknown; refetch: () => void } = {
   data: STAFF, error: null, refetch: vi.fn(),
 };
-const pinLogin = vi.fn(async () => ({ error: undefined }));
+const pinLogin = vi.fn(
+  async (): Promise<{ error?: string | null; remainingAttempts?: number }> => ({ error: undefined }),
+);
 
 vi.mock('../lib/queries', () => ({ useShowroomSalesStaff: () => staffResult }));
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ pinLogin }) }));
@@ -133,5 +135,28 @@ describe('LockScreen staff picker', () => {
     fireEvent.click(within(listbox()).getByRole('option', { name: /kris/i }));
     fireEvent.click(trigger());
     expect(within(listbox()).getAllByRole('option')).toHaveLength(5);
+  });
+});
+
+describe('LockScreen wrong PIN', () => {
+  const signInAsKris = () => {
+    render(<LockScreen />);
+    fireEvent.click(trigger());
+    fireEvent.click(within(listbox()).getByRole('option', { name: /kris/i }));
+    for (const digit of '123456') fireEvent.click(screen.getByRole('button', { name: digit }));
+  };
+
+  it('reads Houzs\'s `bad_pin` as "Invalid PIN", never as the raw code', async () => {
+    pinLogin.mockResolvedValueOnce({ error: 'bad_pin' });
+    signInAsKris();
+    expect(await screen.findByText('Invalid PIN')).toBeInTheDocument();
+    expect(screen.queryByText('bad_pin')).not.toBeInTheDocument();
+    expect(pinLogin).toHaveBeenLastCalledWith('u3', '123456');
+  });
+
+  it('still counts the tries left when the server sends them (2990 `invalid_pin`)', async () => {
+    pinLogin.mockResolvedValueOnce({ error: 'invalid_pin', remainingAttempts: 3 });
+    signInAsKris();
+    expect(await screen.findByText('Invalid PIN — 3 left')).toBeInTheDocument();
   });
 });

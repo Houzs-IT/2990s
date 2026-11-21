@@ -224,7 +224,10 @@ export const LockScreen = () => {
         const after = result.retryAfter ?? 60;
         setRetryAfter(after);
         setErrorMessage(`Too many attempts — try again in ${after}s`);
-      } else if (result.error === 'invalid_pin') {
+      } else if (result.error === 'invalid_pin' || result.error === 'bad_pin') {
+        // Same refusal, two spellings: 2990's API says `invalid_pin` and counts
+        // the tries left; Houzs's /api/pos/pin-login says `bad_pin` and sends no
+        // count. Unmapped, the tablet printed the raw code under the dots.
         const remaining = result.remainingAttempts ?? 0;
         setErrorMessage(
           remaining > 0 ? `Invalid PIN — ${remaining} left` : 'Invalid PIN',
