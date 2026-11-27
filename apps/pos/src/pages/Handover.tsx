@@ -31,6 +31,7 @@ import { missingVariantAxes } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { PhaseNav } from '../components/handover/PhaseNav';
 import { StepFooter } from '../components/handover/StepFooter';
+import { runOnce } from '../lib/run-once';
 import { OrderSummaryPane } from '../components/handover/OrderSummaryPane';
 import { OrderSummaryDisclosure } from '../components/handover/OrderSummaryDisclosure';
 import { CustomerStep } from '../components/handover/CustomerStep';
@@ -107,6 +108,10 @@ export const Handover = () => {
   // Captures the canvas signature at submit time so we persist the exact ink
   // the customer drew — the Sales Order PDF re-embeds it 1:1.
   const signatureRef = useRef<SignaturePadHandle>(null);
+  // Covers the whole submit (item map, voucher claim, SO post), not just the
+  // final mutation, so a double-tap cannot send twice.
+  const submitInFlight = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const venuesForGate = useVenues();
   const activeVenueForGate = useActiveVenue();
@@ -409,7 +414,8 @@ export const Handover = () => {
          rejects POS-tablet drift >0.5% with a `pricing_drift` 400 —
          describePosHandoffError surfaces the offending line + both figures.
        - paid (whole-MYR) becomes depositCenti (sen) on the SO header. */
-  const submitHandoffToSo = async () => {
+  const submitHandoffToSo = () => runOnce(submitInFlight, sendHandoffToSo, setSubmitting);
+  const sendHandoffToSo = async () => {
     setServerError(null);
     setDriftFix(null);
     try {
@@ -724,7 +730,7 @@ export const Handover = () => {
               isFirst={idx === 0}
               currentKey={current.key}
               valid={validity[current.key]}
-              submitting={handoffToSo.isPending}
+              submitting={submitting}
               paymentRecorded={form.paymentRecorded}
               blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total, hasTbcLines, voucherTotal)}
               attempted={attempted}

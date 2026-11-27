@@ -213,3 +213,18 @@ describe('POST /redemptions/:id/release', () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 });
+
+describe('GET /redemptions', () => {
+  it('masks the customer name and phone, since curl passes the Origin gate', async () => {
+    state.rows = [
+      { id: 'r1', customer_name: 'Tan Ah Kow', customer_phone: '+60 12-345 6789', so_doc_no: 'SO-2608-001' },
+      { id: 'r2', customer_name: null, customer_phone: '' },
+      { id: 'r3', customer_name: '陈大文', customer_phone: null },
+    ];
+    const res = await app().request('/campaign-promos/redemptions', from, env);
+    const body = (await res.json()) as { redemptions: Record<string, unknown>[] };
+    expect(body.redemptions[0]).toMatchObject({ customer_name: 'Tan A. K.', customer_phone: '•••6789', so_doc_no: 'SO-2608-001' });
+    expect(body.redemptions[1]).toMatchObject({ customer_name: null, customer_phone: null });
+    expect(body.redemptions[2]).toMatchObject({ customer_name: '陈…' }); // no spaces must not go out whole
+  });
+});
