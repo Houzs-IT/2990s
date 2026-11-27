@@ -262,5 +262,25 @@ campaignPromos.get('/redemptions', async (c) => {
   if (docNo) q = q.eq('so_doc_no', docNo);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ redemptions: data ?? [] });
+  // Anyone with curl passes the Origin gate (header above), so the ledger never
+  // sends a whole name or phone: enough to tell two rows apart, not to call anyone.
+  const redemptions = (data ?? []).map((r) => ({
+    ...r,
+    customer_name: maskName(r.customer_name),
+    customer_phone: maskPhone(r.customer_phone),
+  }));
+  return c.json({ redemptions });
 });
+
+/** "Tan Ah Kow" -> "Tan A. K." */
+export const maskName = (v: unknown): string | null => {
+  const words = String(v ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  return [words[0], ...words.slice(1).map((w) => `${w[0]}.`)].join(' ');
+};
+
+/** "+60 12-345 6789" -> "•••6789" */
+export const maskPhone = (v: unknown): string | null => {
+  const digits = String(v ?? '').replace(/\D/g, '');
+  return digits ? `•••${digits.slice(-4)}` : null;
+};
