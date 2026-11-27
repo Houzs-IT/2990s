@@ -24,6 +24,8 @@
 // `0 <= discount <= qty * unit` — this table is the definition and the ledger,
 // not the till. Worst case is nuisance: fake campaigns, or stock burned to
 // zero. Both are visible in campaign_promo_redemptions and reversible.
+// The ledger also holds customer names and phones, so GET /redemptions masks
+// them: a curl caller gets "Tan A. K." and "•••6789", never the real ones.
 //
 // If a real auth path ever exists (a Houzs token-verify endpoint, or the POS
 // re-pointed at 2990), swap the gate for `supabaseAuth` + a role check and
@@ -272,11 +274,13 @@ campaignPromos.get('/redemptions', async (c) => {
   return c.json({ redemptions });
 });
 
-/** "Tan Ah Kow" -> "Tan A. K." */
+/** "Tan Ah Kow" -> "Tan A. K."; one word ("陈大文", "Muthu") -> "陈…" */
 export const maskName = (v: unknown): string | null => {
   const words = String(v ?? '').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return null;
-  return [words[0], ...words.slice(1).map((w) => `${w[0]}.`)].join(' ');
+  const first = (w: string) => [...w][0]; // whole character, not half an emoji
+  if (words.length === 1) return `${first(words[0]!)}…`;
+  return [words[0], ...words.slice(1).map((w) => `${first(w)}.`)].join(' ');
 };
 
 /** "+60 12-345 6789" -> "•••6789" */
